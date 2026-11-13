@@ -1,0 +1,19 @@
+{
+  "@@locale": "en",
+  "appTitle": "Aqluse",
+  "@appTitle": {
+    "description": "Browser tab title and the name shown on the home screen."
+  },
+  "homeTagline": "Qualified Flutter & Android enthusiast\nDriven by sound technical expertise",
+  "@homeTagline": {
+    "description": "Short self-description under the name on the home screen."
+  },
+  "themeSwitchToLight": "Switch to Light Theme",
+  "@themeSwitchToLight": {
+    "description": "Tooltip of the theme toggle button while the dark theme is active."
+  },
+  "themeSwitchToDark": "Switch to Dark Theme",
+  "@themeSwitchToDark": {
+    "description": "Tooltip of the theme toggle button while the light theme is active."
+  }
+}

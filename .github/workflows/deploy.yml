@@ -1,0 +1,45 @@
+name: deploy
+
+on:
+  push:
+    branches: [ master ]
+
+
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    # TODO: Поисследовать для чего это и какие есть варианты
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Flutter image
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+          pub-cache: true
+      - name: Get dependencies (pub get)
+        run: flutter pub get
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Build (Web)
+        run: flutter build web --base-href "${{ steps.pages.outputs.base_path }}/"
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+
+        # TODO: Это подсказал Gemini
+#        # Копируем для поддержки роутинга
+#               - run: cp build/web/index.html build/web/404.html

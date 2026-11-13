@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="126 126 260 260">
+    <!-- Source of all site icons: a wing of three feathers, the main one at Flutter's 45-degree angle. -->
+    <g transform="translate(173.8 330.1)">
+        <rect x="-35" y="-35" width="195" height="70" rx="35" transform="rotate(5)"
+            fill="#02569B" />
+        <rect x="-35" y="-35" width="245" height="70" rx="35" transform="rotate(-20)" fill="#0175C2"
+            fill-opacity="0.95" />
+        <rect x="-35" y="-35" width="295" height="70" rx="35" transform="rotate(-45)" fill="#13B9FD"
+            fill-opacity="0.95" />
+    </g>
+</svg>

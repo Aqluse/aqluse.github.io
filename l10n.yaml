@@ -1,0 +1,9 @@
+arb-dir: assets/localizations
+output-dir: lib/generated/localization
+template-arb-file: intl_en.arb
+output-localization-file: localizations.dart
+output-class: S
+nullable-getter: false
+format: true
+relax-syntax: false
+use-named-parameters: true
