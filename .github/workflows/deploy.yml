@@ -9,7 +9,6 @@ on:
 jobs:
   deploy:
     name: Build & Deploy
-    # TODO: Поисследовать для чего это и какие есть варианты
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -31,6 +30,13 @@ jobs:
         uses: actions/configure-pages@v5
       - name: Build (Web)
         run: flutter build web --base-href "${{ steps.pages.outputs.base_path }}/"
+      # The app uses path URLs (usePathUrlStrategy). GitHub Pages serves 404.html for unknown
+      # paths, so a copy of index.html lets deep links and reloads open the app.
+      # Such pages still return HTTP status 404 (the app renders fine, but search engines
+      # won't index them). GitHub Pages can't rewrite URLs; to get 200, move to a host that
+      # supports SPA rewrites.
+      - name: Add SPA fallback (404.html)
+        run: cp build/web/index.html build/web/404.html
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -38,8 +44,3 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
-
-
-        # TODO: Это подсказал Gemini
-#        # Копируем для поддержки роутинга
-#               - run: cp build/web/index.html build/web/404.html

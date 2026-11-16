@@ -16,9 +16,10 @@ to https://aqluse.github.io via GitHub Pages.
   (GitHub Pages). Never push to `master` unless explicitly asked.
 - `<base href="$FLUTTER_BASE_HREF">` in `web/index.html` is a placeholder filled in by `--base-href`
   during the CI build. Do not hardcode it.
-- The current navigation (`lib/navigation/`) is temporary. When the real routing is added, GitHub
-  Pages needs a `404.html` copy of `index.html` for deep links — see the commented-out step at the
-  end of the workflow.
+- The app uses path URLs (`usePathUrlStrategy`). GitHub Pages has no SPA fallback, so the workflow
+  copies `index.html` to `404.html` after the build; without it, deep links and reloads show
+  GitHub's 404 page. Keep this step while path URLs are used.
+- The current navigation (`lib/navigation/`) is temporary.
 
 ## Code style
 
