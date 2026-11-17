@@ -130,7 +130,8 @@ class _PerfOverlayState extends State<_PerfOverlay>
     return 'bubbles ${m.bubbles.length} · masks ${m.maskPoints.length} · '
         'bridges ${m.bridges.length} · '
         'logical ${size?.width.round()}×${size?.height.round()} · '
-        'DPR $dpr · $_renderer';
+        'DPR $dpr · $_renderer · '
+        'crossOriginIsolated $perfCrossOriginIsolated';
   }
 
   @override
