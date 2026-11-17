@@ -44,6 +44,20 @@ class _Bubble {
     colorMaskWithAlpha0 = this.colorMask.withAlpha(0);
   }
 
+  static int _nextId = 0;
+
+  /// Unique id, used to key bridges without allocating objects for lookups.
+  final int id = _nextId++;
+
+  /// Position in the sorted bubble list, refreshed every tick.
+  int index = -1;
+
+  /// Whether a bridge connects this bubble to a visible one, refreshed every tick.
+  bool hasVisibleNeighbor = false;
+
+  /// Scratch sort key for the metaball renderer's overflow handling.
+  double sortKey = 0;
+
   final Random _random;
   late final Color _color;
   late Color color;
@@ -141,6 +155,12 @@ class _MaskPoint {
       radius = _generateBubbleRadius(random) * 2;
 
   Offset position;
+
+  /// Position in the mask point list, refreshed every tick.
+  int index = -1;
+
+  /// Scratch sort key for the metaball renderer's overflow handling.
+  double sortKey = 0;
   double angleRadians;
   final double speed;
   final double radius;

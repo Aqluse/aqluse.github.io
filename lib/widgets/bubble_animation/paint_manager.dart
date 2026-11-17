@@ -10,10 +10,12 @@ class _PaintManager extends ChangeNotifier {
   Size get _canvasSize => _canvasSizeRaw!;
   bool _canvasSizeUpdated = false;
 
-  /// PERF: metaball renderer stats (filled by _MetaballRenderer). Tiles and splits are per
-  /// frame; max values and dropped objects accumulate (reset when a measuring phase starts).
+  /// PERF: metaball renderer stats (filled by _MetaballRenderer). Tiles, splits and culled
+  /// (saturated, invisible) spots are per frame; max values and dropped objects accumulate
+  /// (reset when a measuring phase starts).
   int statSdfTiles = 0;
   int statSdfSplits = 0;
+  int statSdfCulled = 0;
   int statSdfMaxTileBubbles = 0;
   int statSdfMaxTileSpots = 0;
   int statSdfDropped = 0;
@@ -25,8 +27,26 @@ class _PaintManager extends ChangeNotifier {
   }
 
   final _SortedBubbleList bubbles = _SortedBubbleList();
-  Set<_BubbleBridge> bridges = {};
+
+  /// Bridges keyed by [_pairKey]; insertion-ordered like the former Set.
+  final Map<int, _BubbleBridge> bridges = {};
   List<_MaskPoint> maskPoints = [];
+
+  // Spatial grids rebuilt every tick; also used by the painter (positions don't change between
+  // a tick and the following paint).
+  final _SpatialGrid<_Bubble> bubbleGrid = _SpatialGrid(_kGridCellSize);
+  final _SpatialGrid<_MaskPoint> spotGrid = _SpatialGrid(_kGridCellSize);
+  double maxBubbleRadius = 0;
+  double maxSpotRadius = 0;
+  final List<_Bubble> _nearBubbles = [];
+
+  static const double _kGridCellSize = 120;
+
+  static int _pairKey(_Bubble a, _Bubble b) {
+    // 2^26 ids per side keeps the key exact on the web (doubles, 53-bit integers).
+    const shift = 1 << 26;
+    return a.id < b.id ? a.id * shift + b.id : b.id * shift + a.id;
+  }
 
   void init() {
     if (bubbles.isNotEmpty) return;
@@ -260,63 +280,98 @@ class _PaintManager extends ChangeNotifier {
 
     final speedFactor = timeDelta * 150;
 
-    for (final m in maskPoints) {
+    double maxSpot = 0;
+    spotGrid.reset(_canvasSize);
+    for (int i = 0; i < maskPoints.length; i++) {
+      final m = maskPoints[i];
+      m.index = i;
       if (_canvasSizeUpdated || m.visible) {
         m.updateVisibility(_canvasSize);
       }
       if (m.visible) {
         m.update(_canvasSize, speedFactor);
+        // Only visible spots are ever drawn.
+        spotGrid.insert(m, m.position);
+        maxSpot = max(maxSpot, m.radius);
       }
+    }
+    maxSpotRadius = maxSpot;
+
+    // Visibility before movement, as before.
+    for (int i = 0; i < bubbles.length; i++) {
+      final b = bubbles[i];
+      b.index = i;
+      b.hasVisibleNeighbor = false;
+      if (_canvasSizeUpdated || b.visible) {
+        b.updateVisibility(_canvasSize);
+      }
+    }
+
+    // One pass over bridges instead of scanning all bridges for every bubble.
+    for (final br in bridges.values) {
+      if (br.bubble2.visible) br.bubble1.hasVisibleNeighbor = true;
+      if (br.bubble1.visible) br.bubble2.hasVisibleNeighbor = true;
     }
 
     for (int i = bubbles.length - 1; i >= 0; i--) {
       final b = bubbles[i];
 
-      if (_canvasSizeUpdated || b.visible) {
-        b.updateVisibility(_canvasSize);
-      }
-
       // Move bubble if it is visible OR connected via bridge to another VISIBLE bubble
-      late final hasVisibleNeighbor = bridges.any(
-        (br) =>
-            (br.bubble1 == b && br.bubble2.visible) ||
-            (br.bubble2 == b && br.bubble1.visible),
-      );
-
-      if (b.visible || hasVisibleNeighbor) {
+      if (b.visible || b.hasVisibleNeighbor) {
         b.update(
           _canvasSize,
           speedFactor,
-          forceMovement: !b.visible && hasVisibleNeighbor,
+          forceMovement: !b.visible && b.hasVisibleNeighbor,
         );
       }
+    }
 
-      if (b.visible) {
-        bool? covered;
-        bool? glowCovered;
+    double maxBubble = 0;
+    bubbleGrid.reset(_canvasSize);
+    for (final b in bubbles) {
+      bubbleGrid.insert(b, b.position);
+      maxBubble = max(maxBubble, b.radius);
+    }
+    maxBubbleRadius = maxBubble;
 
-        for (int j = bubbles.length - 1; j > i; j--) {
-          final later = bubbles[j];
-          if (!later.needsDraw) continue;
+    // Descending, so `later.needsDraw` already reflects this tick's coverage.
+    for (int i = bubbles.length - 1; i >= 0; i--) {
+      final b = bubbles[i];
+      if (!b.visible) continue;
 
-          if (isBubbleCoveredByLaterBubble(b, later)) {
-            covered = true;
-            break;
-          }
+      // TODO: дублирование с paint
+      final offset = b.radius * 0.2;
+      final glowCenter = b.position - Offset(offset, offset);
+      final glowRadius = b.radius * 0.8;
 
-          // TODO: дублирование с paint
-          late final offset = b.radius * 0.2;
-          late final glowCenter = b.position - Offset(offset, offset);
-          late final glowRadius = b.radius * 0.8;
-          if (covered != true &&
-              isGlowCoveredByLaterBubble(glowCenter, glowRadius, later)) {
-            glowCovered = true;
-            break;
-          }
+      // Same result as scanning later bubbles from the last one and stopping at the first that
+      // covers the bubble or its glow: track the highest index for each condition.
+      int coverIndex = -1;
+      int glowIndex = -1;
+      final near = bubbleGrid.query(
+        b.position,
+        maxBubble + offset * 1.5,
+        _nearBubbles,
+      );
+      for (final later in near) {
+        final j = later.index;
+        if (j <= i || !later.needsDraw) continue;
+
+        if (j > coverIndex && isBubbleCoveredByLaterBubble(b, later)) {
+          coverIndex = j;
         }
-
-        b.updateCovered(covered: covered, glowCovered: glowCovered);
+        if (j > glowIndex &&
+            isGlowCoveredByLaterBubble(glowCenter, glowRadius, later)) {
+          glowIndex = j;
+        }
       }
+
+      final covered = coverIndex >= 0 && coverIndex >= glowIndex;
+      final glowCovered = glowIndex > coverIndex;
+      b.updateCovered(
+        covered: covered ? true : null,
+        glowCovered: glowCovered ? true : null,
+      );
     }
 
     // TODO: Not effective enough for now, awaits for implementation of sections for objects, then maybe...
@@ -361,12 +416,7 @@ class _PaintManager extends ChangeNotifier {
         if (m.covered(b)) continue;
       }*/
 
-    // Loop complexity optimization isn't needed here as it relies on updated bubble values
-    for (int i = 0; i < bubbles.length; i++) {
-      for (int j = i + 1; j < bubbles.length; j++) {
-        _addBridgeIfNeeded(bubbles[i], bubbles[j]);
-      }
-    }
+    _updateBridges(maxBubble);
 
     notifyListeners();
     _canvasSizeUpdated = false;
@@ -382,25 +432,51 @@ class _PaintManager extends ChangeNotifier {
     }
   }
 
-  void _addBridgeIfNeeded(_Bubble b1, _Bubble b2) {
+  /// Connects touching visible bubbles and disconnects stretched-out bridges.
+  ///
+  /// Same rules as checking every pair, but new bridges are searched only among grid neighbors
+  /// (touching bubbles are at most `2 * maxRadius` apart) and existing ones are checked directly,
+  /// with no temporary objects.
+  void _updateBridges(double maxRadius) {
     double getDisconnectBridgeLength(_Bubble b1, _Bubble b2) {
       // TODO: The scientific formula is there, but the drawing of the bridge is not perfect using it yet.
       //(2 * b1.radius * b2.radius) / (b1.radius + b2.radius);
       return (b1.radius * b2.radius) / (b1.radius + b2.radius) / 3;
     }
 
-    if (b1 == b2 || !b1.visible || !b2.visible) return;
+    bridges.removeWhere((_, bridge) {
+      final b1 = bridge.bubble1;
+      final b2 = bridge.bubble2;
+      if (!b1.visible || !b2.visible) return false;
 
-    final distSquared = (b1.position - b2.position).distanceSquared;
-    final radiiSum = b1.radius + b2.radius;
-    late final effectiveDisconnectBridgeLength =
-        radiiSum + getDisconnectBridgeLength(b1, b2);
+      final distSquared = (b1.position - b2.position).distanceSquared;
+      final effectiveDisconnectBridgeLength =
+          b1.radius + b2.radius + getDisconnectBridgeLength(b1, b2);
+      return distSquared >
+          effectiveDisconnectBridgeLength * effectiveDisconnectBridgeLength;
+    });
 
-    if (distSquared < radiiSum * radiiSum) {
-      bridges.add(_BubbleBridge(bubble1: b1, bubble2: b2));
-    } else if (distSquared >
-        effectiveDisconnectBridgeLength * effectiveDisconnectBridgeLength) {
-      bridges.remove(_BubbleBridge(bubble1: b1, bubble2: b2));
+    for (final b1 in bubbles) {
+      if (!b1.visible) continue;
+
+      final near = bubbleGrid.query(
+        b1.position,
+        b1.radius + maxRadius,
+        _nearBubbles,
+      );
+      for (final b2 in near) {
+        // Each pair once, with bubble1 being the earlier one (as with the pairwise loop).
+        if (b2.index <= b1.index || !b2.visible) continue;
+
+        final distSquared = (b1.position - b2.position).distanceSquared;
+        final radiiSum = b1.radius + b2.radius;
+        if (distSquared < radiiSum * radiiSum) {
+          final key = _pairKey(b1, b2);
+          if (!bridges.containsKey(key)) {
+            bridges[key] = _BubbleBridge(bubble1: b1, bubble2: b2);
+          }
+        }
+      }
     }
   }
 
@@ -433,7 +509,7 @@ class _PaintManager extends ChangeNotifier {
   void _removeBubble(_Bubble bubble) {
     bubbles.remove(bubble);
     bridges.removeWhere(
-      (bridge) => bridge.bubble1 == bubble || bridge.bubble2 == bubble,
+      (_, bridge) => bridge.bubble1 == bubble || bridge.bubble2 == bubble,
     );
   }
 }

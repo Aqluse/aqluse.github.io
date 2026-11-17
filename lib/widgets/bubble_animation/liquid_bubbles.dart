@@ -12,6 +12,7 @@ part 'objects.dart';
 part 'paint_manager.dart';
 part 'painter.dart';
 part 'perf_overlay.dart';
+part 'spatial_grid.dart';
 
 const double? _kDebugBubbleRadius = null; //100;
 const bool _kDebugModeDrawBridgeOnTop = false;
