@@ -143,7 +143,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
         'run ${_runIndex + 1}/$_runs: measuring '
             '${(_lastFrame ?? Duration.zero).inSeconds - _phaseStart.inSeconds}'
             '/${_window.inSeconds}s${_result == null ? '' : '\nlast: $_result'}',
-      .done => '$_result (tap to restart)',
+      .done => '✅ ALL $_runs RUNS DONE — last: $_result (tap to restart)',
     };
 
     return GestureDetector(
