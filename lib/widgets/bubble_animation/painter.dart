@@ -15,10 +15,14 @@ class _Painter extends CustomPainter {
 
   final Color _transparentWhite = Colors.white.withValues(alpha: 0);
 
+  // Reusable buffers for grid queries.
+  final List<_Bubble> _nearBubbles = [];
+  final List<_MaskPoint> _nearSpots = [];
+
   @override
   void paint(Canvas canvas, Size size) {
     if (!_kDebugModeDrawBridgeOnTop) {
-      for (final bridge in manager.bridges) {
+      for (final bridge in manager.bridges.values) {
         _drawBridge(canvas: canvas, bridge: bridge);
       }
     }
@@ -43,8 +47,14 @@ class _Painter extends CustomPainter {
       _bubbleSurfacePaint.color = b.color;
       canvas.drawCircle(b.position, b.radius, _bubbleSurfacePaint);
 
-      // Mask spots within bubble.
-      for (final spot in manager.maskPoints) {
+      // Mask spots within bubble. Grid order differs from list order, which is fine here:
+      // all spots of one bubble share its mask color, so their blending is order-independent.
+      final nearSpots = manager.spotGrid.query(
+        b.position,
+        b.radius + manager.maxSpotRadius,
+        _nearSpots,
+      );
+      for (final spot in nearSpots) {
         if (!spot.needsDraw(b)) continue;
 
         final dx = b.position.dx - spot.position.dx;
@@ -83,7 +93,7 @@ class _Painter extends CustomPainter {
     }
 
     if (_kDebugModeDrawBridgeOnTop) {
-      for (final bridge in manager.bridges) {
+      for (final bridge in manager.bridges.values) {
         _drawBridge(canvas: canvas, bridge: bridge);
       }
     }
@@ -176,8 +186,13 @@ class _Painter extends CustomPainter {
     final midBetweenCenters = (b1.position + b2.position) / 2;
     final maxBridgeRadius = max(b1.radius, b2.radius);
 
-    for (int i = manager.bubbles.length - 1; i >= 0; i--) {
-      final bubble = manager.bubbles[i];
+    // A covering bubble's center is within its radius of the midpoint on both axes.
+    final nearBubbles = manager.bubbleGrid.query(
+      midBetweenCenters,
+      manager.maxBubbleRadius,
+      _nearBubbles,
+    );
+    for (final bubble in nearBubbles) {
       if (isBridgeCovered(
         bubble,
         b1,
@@ -238,7 +253,20 @@ class _Painter extends CustomPainter {
 
     canvas.drawPath(_bridgePath, _bridgePaint);
 
-    for (final spot in manager.maskPoints) {
+    // Spots near the bridge axis, in list order: spot colors differ here, so the drawing order
+    // matters for blending.
+    final List<_MaskPoint> nearSpots;
+    if (stretch > 0.3) {
+      nearSpots = const [];
+    } else {
+      final reach = manager.maxSpotRadius + maxBridgeRadius;
+      nearSpots = manager.spotGrid.queryRect(
+        Rect.fromPoints(b1.position, b2.position).inflate(reach),
+        _nearSpots,
+      )..sort((a, b) => a.index.compareTo(b.index));
+    }
+
+    for (final spot in nearSpots) {
       // Path masks severely degrade performance;
       // skip drawing masks if the visible part of the bridge is stretched.
       if (stretch > 0.3) break;
