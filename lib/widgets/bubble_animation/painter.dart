@@ -15,6 +15,18 @@ class _Painter extends CustomPainter {
 
   final Color _transparentWhite = Colors.white.withValues(alpha: 0);
 
+  /// Max spots passed to the bubble shader; must match kMaxSpots in shaders/bubble.frag.
+  static const int _kMaxShaderSpots = 32;
+
+  /// Set once shaders/bubble.frag is loaded; until then bubbles are drawn the old way.
+  ui.FragmentProgram? bubbleProgram;
+
+  // One shader instance per drawn bubble, reused across frames, so uniforms of different
+  // bubbles never share an instance within a frame.
+  final List<ui.FragmentShader> _bubbleShaders = [];
+  final Paint _bubbleShaderPaint = Paint();
+  final List<_MaskPoint> _bubbleSpots = [];
+
   @override
   void paint(Canvas canvas, Size size) {
     if (!_kDebugModeDrawBridgeOnTop) {
@@ -34,10 +46,18 @@ class _Painter extends CustomPainter {
       _bubbleSurfacePaint,
     );*/
 
+    final program = _kUseShaders ? bubbleProgram : null;
+    int shaderIndex = 0;
+
     for (int i = 0; i < manager.bubbles.length; i++) {
       final b = manager.bubbles[i];
 
       if (!b.needsDraw) continue;
+
+      if (program != null) {
+        _drawBubbleWithShader(canvas, b, program, shaderIndex++);
+        continue;
+      }
 
       // Basic bubble.
       _bubbleSurfacePaint.color = b.color;
@@ -47,19 +67,8 @@ class _Painter extends CustomPainter {
       for (final spot in manager.maskPoints) {
         if (!spot.needsDraw(b)) continue;
 
-        final dx = b.position.dx - spot.position.dx;
-        final dy = b.position.dy - spot.position.dy;
-        final maxDist = b.radius + spot.radius;
-
-        if (dx * dx + dy * dy <= maxDist * maxDist) {
-          _bubbleMaskPaint.shader = ui.Gradient.radial(
-            spot.position,
-            spot.radius,
-            [b.colorMask, b.colorMaskWithAlpha0],
-            const [0.05, 1.0],
-          );
-
-          canvas.drawCircle(b.position, b.radius, _bubbleMaskPaint);
+        if (_spotTouchesBubble(spot, b)) {
+          _drawMaskSpot(canvas, b, spot);
         }
 
         if (_kDebugModeHighlightMaskPoints) {
@@ -69,16 +78,7 @@ class _Painter extends CustomPainter {
 
       // Bubble's inner glow (for deepness).
       if (!b.glowCovered) {
-        final offset = b.radius * 0.2;
-        final glowCenter = b.position - Offset(offset, offset);
-        // TODO: Возможно учитывая радиус будет эффективно не делать отдельную проверку на перекрытие glow
-        final glowRadius = b.radius * 0.8;
-
-        _bubbleGlowPaint.shader = ui.Gradient.radial(glowCenter, glowRadius, [
-          Colors.white.withValues(alpha: 0.3 * b.opacity),
-          _transparentWhite,
-        ]);
-        canvas.drawCircle(b.position, b.radius, _bubbleGlowPaint);
+        _drawGlow(canvas, b);
       }
     }
 
@@ -91,6 +91,101 @@ class _Painter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+
+  bool _spotTouchesBubble(_MaskPoint spot, _Bubble b) {
+    final dx = b.position.dx - spot.position.dx;
+    final dy = b.position.dy - spot.position.dy;
+    final maxDist = b.radius + spot.radius;
+    return dx * dx + dy * dy <= maxDist * maxDist;
+  }
+
+  void _drawMaskSpot(Canvas canvas, _Bubble b, _MaskPoint spot) {
+    _bubbleMaskPaint.shader = ui.Gradient.radial(
+      spot.position,
+      spot.radius,
+      [b.colorMask, b.colorMaskWithAlpha0],
+      const [0.05, 1.0],
+    );
+
+    canvas.drawCircle(b.position, b.radius, _bubbleMaskPaint);
+  }
+
+  void _drawGlow(Canvas canvas, _Bubble b) {
+    final offset = b.radius * 0.2;
+    final glowCenter = b.position - Offset(offset, offset);
+    // TODO: Возможно учитывая радиус будет эффективно не делать отдельную проверку на перекрытие glow
+    final glowRadius = b.radius * 0.8;
+
+    _bubbleGlowPaint.shader = ui.Gradient.radial(glowCenter, glowRadius, [
+      Colors.white.withValues(alpha: 0.3 * b.opacity),
+      _transparentWhite,
+    ]);
+    canvas.drawCircle(b.position, b.radius, _bubbleGlowPaint);
+  }
+
+  /// Draws surface, mask spots and glow of [b] in a single draw call via shaders/bubble.frag.
+  ///
+  /// Spots beyond [_kMaxShaderSpots] (and then the glow, to keep the layer order) are drawn
+  /// the old way on top, so nothing is lost.
+  void _drawBubbleWithShader(
+    Canvas canvas,
+    _Bubble b,
+    ui.FragmentProgram program,
+    int shaderIndex,
+  ) {
+    _bubbleSpots.clear();
+    for (final spot in manager.maskPoints) {
+      if (spot.needsDraw(b) && _spotTouchesBubble(spot, b)) {
+        _bubbleSpots.add(spot);
+      }
+    }
+    final spotCount = _bubbleSpots.length;
+    if (spotCount > manager.statMaxBubbleSpots) {
+      manager.statMaxBubbleSpots = spotCount;
+    }
+    final overflow = spotCount > _kMaxShaderSpots;
+    final shaderSpotCount = overflow ? _kMaxShaderSpots : spotCount;
+
+    while (_bubbleShaders.length <= shaderIndex) {
+      _bubbleShaders.add(program.fragmentShader());
+    }
+    final shader = _bubbleShaders[shaderIndex];
+
+    final color = b.color;
+    final mask = b.colorMask;
+    shader
+      ..setFloat(0, b.position.dx)
+      ..setFloat(1, b.position.dy)
+      ..setFloat(2, b.radius)
+      ..setFloat(3, color.r)
+      ..setFloat(4, color.g)
+      ..setFloat(5, color.b)
+      ..setFloat(6, color.a)
+      ..setFloat(7, mask.r)
+      ..setFloat(8, mask.g)
+      ..setFloat(9, mask.b)
+      ..setFloat(10, mask.a)
+      ..setFloat(11, !b.glowCovered && !overflow ? 0.3 * b.opacity : 0)
+      ..setFloat(12, shaderSpotCount.toDouble());
+    for (int s = 0; s < shaderSpotCount; s++) {
+      final spot = _bubbleSpots[s];
+      final base = 13 + s * 4;
+      shader
+        ..setFloat(base, spot.position.dx)
+        ..setFloat(base + 1, spot.position.dy)
+        ..setFloat(base + 2, spot.radius);
+    }
+
+    _bubbleShaderPaint.shader = shader;
+    canvas.drawCircle(b.position, b.radius, _bubbleShaderPaint);
+
+    if (overflow) {
+      for (int s = _kMaxShaderSpots; s < spotCount; s++) {
+        _drawMaskSpot(canvas, b, _bubbleSpots[s]);
+      }
+      if (!b.glowCovered) _drawGlow(canvas, b);
+    }
+  }
 
   // TODO: Needs refactoring (moving calculations to onTick) after proper bridge figure paint is done.
   void _drawBridge({required Canvas canvas, required _BubbleBridge bridge}) {

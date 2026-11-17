@@ -35,6 +35,9 @@ flutter:
     - assets/icons/branding/linkedin/
     - assets/icons/branding/telegram/
 
+  shaders:
+    - shaders/bubble.frag
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

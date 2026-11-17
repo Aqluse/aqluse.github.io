@@ -136,6 +136,8 @@ class _PerfOverlayState extends State<_PerfOverlay>
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return 'bubbles ${m.bubbles.length} · masks ${m.maskPoints.length} · '
         'bridges ${m.bridges.length} · '
+        'shader ${_kUseShaders ? 'on' : 'off'} · '
+        'max spots/bubble ${m.statMaxBubbleSpots} · '
         'logical ${size?.width.round()}×${size?.height.round()} · '
         'DPR $dpr · $_renderer · '
         'crossOriginIsolated $perfCrossOriginIsolated';

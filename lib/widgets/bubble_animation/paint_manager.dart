@@ -9,6 +9,9 @@ class _PaintManager extends ChangeNotifier {
 
   Size get _canvasSize => _canvasSizeRaw!;
   bool _canvasSizeUpdated = false;
+
+  /// PERF: max number of mask spots seen on one bubble (filled by the shader path).
+  int statMaxBubbleSpots = 0;
   final _SortedBubbleList bubbles = _SortedBubbleList();
   Set<_BubbleBridge> bridges = {};
   List<_MaskPoint> maskPoints = [];

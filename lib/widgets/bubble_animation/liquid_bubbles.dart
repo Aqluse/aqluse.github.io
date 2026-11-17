@@ -18,6 +18,9 @@ const bool _kDebugModeHighlightMaskPoints = false;
 
 const int _kPixelsPerOneBubble = 30_000; //75_000; //30_000; //100_000;
 
+/// Draw bubbles with shaders/bubble.frag; `--dart-define=PERF_SHADER=off` forces the old way.
+const bool _kUseShaders = String.fromEnvironment('PERF_SHADER') != 'off';
+
 void main() => runApp(const MaterialApp(home: LiquidBubbles(child: null)));
 
 class LiquidBubbles extends StatefulWidget {
@@ -51,6 +54,12 @@ class _LiquidBubblesState extends State<LiquidBubbles>
   void initState() {
     super.initState();
     _painter = _Painter(manager: _manager);
+    if (_kUseShaders) {
+      ui.FragmentProgram.fromAsset('shaders/bubble.frag').then(
+        (program) => _painter.bubbleProgram = program,
+        onError: (Object e) => debugPrint('bubble.frag failed to load: $e'),
+      );
+    }
 
     _ticker = createTicker((elapsed) {
       final lastElapsed = _lastElapsed;
