@@ -4,28 +4,74 @@ part of 'liquid_bubbles.dart';
 /// `--dart-define=PERF_SDF=off` forces the old renderer.
 const bool _kUseSdf = String.fromEnvironment('PERF_SDF') != 'off';
 
-/// Smooth-min distance (logical px): bubbles closer than this fuse.
-const double _kSdfSmoothing = 24;
+double _sdfEnv(String value, double fallback, {double minValue = 0}) =>
+    max(minValue, double.tryParse(value) ?? fallback);
 
-/// Color weight falloff in the shader: exp(-distance * sharpness). The color transition between
-/// fused bubbles is about `_kSdfSmoothing / 5` wide.
-const double _kSdfColorSharpness = 5 / _kSdfSmoothing;
+// Look tunables (PERF): `--dart-define=NAME=value`; defaults keep the original SDF look.
+
+/// PERF_SDF_K: smooth-min distance (logical px). Shape fusion: bubbles closer than this grow a
+/// neck towards each other. Also the culling margin and the color weight cutoff.
+final double _kSdfSmoothing = _sdfEnv(
+  const String.fromEnvironment('PERF_SDF_K'),
+  24,
+  minValue: 0.01,
+);
+
+/// PERF_SDF_FADE: width (logical px) of the color cross-fade between bubbles: weights are
+/// exp(-distance / fade).
+final double _kSdfColorFade = _sdfEnv(
+  const String.fromEnvironment('PERF_SDF_FADE'),
+  24 / 5,
+  minValue: 0.01,
+);
+
+/// PERF_SDF_DEPTH: how deep inside a bubble (logical px) its weight keeps growing. Small values
+/// make every bubble covering a pixel weigh the same, so overlaps are decided by
+/// PERF_SDF_SIZE_BIAS instead of by depth.
+final double _kSdfDepthClamp = _sdfEnv(
+  const String.fromEnvironment('PERF_SDF_DEPTH'),
+  72,
+);
+
+/// PERF_SDF_SIZE_BIAS: extra weight per logical px of radius (weights * exp(radius * bias)),
+/// so bigger bubbles win overlaps like in the old renderer (bigger on top). 0 = off.
+final double _kSdfSizeBias = _sdfEnv(
+  const String.fromEnvironment('PERF_SDF_SIZE_BIAS'),
+  0,
+);
+
+/// PERF_SDF_AA: edge anti-aliasing width in physical pixels.
+final double _kSdfAaWidth = _sdfEnv(
+  const String.fromEnvironment('PERF_SDF_AA'),
+  1,
+  minValue: 0.01,
+);
+
+String _sdfTunablesLine() =>
+    'k $_kSdfSmoothing · fade ${_kSdfColorFade.toStringAsFixed(2)} · '
+    'depth $_kSdfDepthClamp · sizeBias $_kSdfSizeBias · aa $_kSdfAaWidth';
 
 /// Top-level tile size (logical px).
 const double _kSdfTileSize = 256;
 
-/// How many times an overflowing tile may be split into 4 (256 -> 128 -> 64).
-const int _kSdfMaxSplitDepth = 2;
+/// How many times an overflowing tile may be split into 4 (256 -> 128 -> 64 -> 32 -> 16).
+const int _kSdfMaxSplitDepth = 4;
 
-/// Capacities; must match kMaxBubbles / kMaxSpots in shaders/metaballs.frag.
-const int _kSdfMaxBubbles = 32;
-const int _kSdfMaxSpots = 64;
+/// Capacities; must match kMaxBubblePairs * 2 / kMaxSpotGroups * 4 in shaders/metaballs.frag.
+const int _kSdfMaxBubbles = 64;
+const int _kSdfMaxSpots = 128;
 
-// Float offsets of the uniform arrays in shaders/metaballs.frag.
-const int _kSdfBubblesBase = 5;
-const int _kSdfColorsBase = _kSdfBubblesBase + _kSdfMaxBubbles * 4;
-const int _kSdfMaskColorsBase = _kSdfColorsBase + _kSdfMaxBubbles * 4;
-const int _kSdfSpotsBase = _kSdfMaskColorsBase + _kSdfMaxBubbles * 4;
+// Float offsets of the uniforms in shaders/metaballs.frag.
+const int _kSdfBubblesABase = 8;
+const int _kSdfBubblesBBase = _kSdfBubblesABase + _kSdfMaxBubbles ~/ 2 * 4;
+const int _kSdfColorsBase = _kSdfBubblesBBase + _kSdfMaxBubbles ~/ 2 * 4;
+const int _kSdfSpotsABase = _kSdfColorsBase + _kSdfMaxBubbles ~/ 2 * 4;
+const int _kSdfSpotsBBase = _kSdfSpotsABase + _kSdfMaxSpots ~/ 4 * 4;
+const int _kSdfSpotsCBase = _kSdfSpotsBBase + _kSdfMaxSpots ~/ 4 * 4;
+
+/// Once the guaranteed remaining transparency of a tile's mask drops below this, further spots
+/// can't change the 8-bit output and are skipped.
+const double _kSdfSaturatedKeep = 1 / 512;
 
 /// Draws all bubbles as one smooth union per screen tile: one draw call per non-empty tile.
 class _MetaballRenderer {
@@ -39,29 +85,25 @@ class _MetaballRenderer {
   final Paint _paint = Paint()..isAntiAlias = false;
   int _shaderIndex = 0;
 
-  // Objects of the current frame.
   late _PaintManager _manager;
   double _pixelSize = 1;
 
-  // Indices of objects touching the canvas, then one list per split depth (reused).
-  final List<int> _rootBubbles = [];
-  final List<int> _rootSpots = [];
-  final List<List<int>> _tileBubbles = List.generate(
+  // Grid candidates of a top-level tile, then one list per split depth (reused).
+  final List<_Bubble> _rootBubbles = [];
+  final List<_MaskPoint> _rootSpots = [];
+  final List<List<_Bubble>> _tileBubbles = List.generate(
     _kSdfMaxSplitDepth + 1,
-    (_) => <int>[],
+    (_) => <_Bubble>[],
   );
-  final List<List<int>> _tileSpots = List.generate(
+  final List<List<_MaskPoint>> _tileSpots = List.generate(
     _kSdfMaxSplitDepth + 1,
-    (_) => <int>[],
+    (_) => <_MaskPoint>[],
   );
 
   // Per-frame stats.
   int _frameTiles = 0;
   int _frameSplits = 0;
-
-  // Center of the tile being trimmed on overflow (used by the sort comparators).
-  double _trimCx = 0;
-  double _trimCy = 0;
+  int _frameCulled = 0;
 
   void paint(
     Canvas canvas,
@@ -74,66 +116,53 @@ class _MetaballRenderer {
     _shaderIndex = 0;
     _frameTiles = 0;
     _frameSplits = 0;
+    _frameCulled = 0;
 
-    final bubbles = manager.bubbles;
-    final spots = manager.maskPoints;
     final w = size.width;
     final h = size.height;
+    final bubbleReach = manager.maxBubbleRadius + _kSdfSmoothing;
+    final spotReach = manager.maxSpotRadius;
 
-    _rootBubbles.clear();
-    for (int i = 0; i < bubbles.length; i++) {
-      final b = bubbles[i];
-      if (_circleHitsRect(
-        b.position.dx,
-        b.position.dy,
-        b.radius + _kSdfSmoothing,
-        0,
-        0,
-        w,
-        h,
-      )) {
-        _rootBubbles.add(i);
-      }
-    }
-
-    if (_rootBubbles.isNotEmpty) {
-      _rootSpots.clear();
-      for (int i = 0; i < spots.length; i++) {
-        final s = spots[i];
-        if (_circleHitsRect(
-          s.position.dx,
-          s.position.dy,
-          s.radius,
+    for (double top = 0; top < h; top += _kSdfTileSize) {
+      final bottom = min(top + _kSdfTileSize, h);
+      for (double left = 0; left < w; left += _kSdfTileSize) {
+        final right = min(left + _kSdfTileSize, w);
+        manager.bubbleGrid.queryRect(
+          Rect.fromLTRB(
+            left - bubbleReach,
+            top - bubbleReach,
+            right + bubbleReach,
+            bottom + bubbleReach,
+          ),
+          _rootBubbles,
+        );
+        if (_rootBubbles.isEmpty) continue;
+        manager.spotGrid.queryRect(
+          Rect.fromLTRB(
+            left - spotReach,
+            top - spotReach,
+            right + spotReach,
+            bottom + spotReach,
+          ),
+          _rootSpots,
+        );
+        _drawTile(
+          canvas,
+          left,
+          top,
+          right,
+          bottom,
           0,
-          0,
-          w,
-          h,
-        )) {
-          _rootSpots.add(i);
-        }
-      }
-
-      for (double top = 0; top < h; top += _kSdfTileSize) {
-        final bottom = min(top + _kSdfTileSize, h);
-        for (double left = 0; left < w; left += _kSdfTileSize) {
-          final right = min(left + _kSdfTileSize, w);
-          _drawTile(
-            canvas,
-            left,
-            top,
-            right,
-            bottom,
-            0,
-            _rootBubbles,
-            _rootSpots,
-          );
-        }
+          _rootBubbles,
+          _rootSpots,
+        );
       }
     }
 
     manager
       ..statSdfTiles = _frameTiles
-      ..statSdfSplits = _frameSplits;
+      ..statSdfSplits = _frameSplits
+      ..statSdfCulled = _frameCulled;
   }
 
   static bool _circleHitsRect(
@@ -157,16 +186,12 @@ class _MetaballRenderer {
     double right,
     double bottom,
     int depth,
-    List<int> sourceBubbles,
-    List<int> sourceSpots,
+    List<_Bubble> sourceBubbles,
+    List<_MaskPoint> sourceSpots,
   ) {
-    final bubbles = _manager.bubbles;
-    final spots = _manager.maskPoints;
-
     final tileBubbles = _tileBubbles[depth]..clear();
     for (int k = 0; k < sourceBubbles.length; k++) {
-      final i = sourceBubbles[k];
-      final b = bubbles[i];
+      final b = sourceBubbles[k];
       if (_circleHitsRect(
         b.position.dx,
         b.position.dy,
@@ -176,15 +201,14 @@ class _MetaballRenderer {
         right,
         bottom,
       )) {
-        tileBubbles.add(i);
+        tileBubbles.add(b);
       }
     }
     if (tileBubbles.isEmpty) return;
 
     final tileSpots = _tileSpots[depth]..clear();
     for (int k = 0; k < sourceSpots.length; k++) {
-      final i = sourceSpots[k];
-      final s = spots[i];
+      final s = sourceSpots[k];
       if (_circleHitsRect(
         s.position.dx,
         s.position.dy,
@@ -194,7 +218,7 @@ class _MetaballRenderer {
         right,
         bottom,
       )) {
-        tileSpots.add(i);
+        tileSpots.add(s);
       }
     }
 
@@ -203,6 +227,10 @@ class _MetaballRenderer {
     }
     if (tileSpots.length > _manager.statSdfMaxTileSpots) {
       _manager.statSdfMaxTileSpots = tileSpots.length;
+    }
+
+    if (tileSpots.length > _kSdfMaxSpots) {
+      _cullSaturatedSpots(tileSpots, left, top, right, bottom);
     }
 
     final overflow =
@@ -231,16 +259,22 @@ class _MetaballRenderer {
     }
 
     if (overflow) {
-      // Smallest tile and still too many objects: keep the nearest ones.
-      _trimCx = (left + right) / 2;
-      _trimCy = (top + bottom) / 2;
+      // Smallest tile and still too many objects: keep the nearest bubbles and the strongest
+      // spots (already sorted by the saturation culling).
       if (tileBubbles.length > _kSdfMaxBubbles) {
-        tileBubbles.sort(_compareBubbleDistance);
+        final cx = (left + right) / 2;
+        final cy = (top + bottom) / 2;
+        for (int k = 0; k < tileBubbles.length; k++) {
+          final b = tileBubbles[k];
+          final dx = b.position.dx - cx;
+          final dy = b.position.dy - cy;
+          b.sortKey = sqrt(dx * dx + dy * dy) - b.radius;
+        }
+        tileBubbles.sort(_compareBubbleKeyAscending);
         _manager.statSdfDropped += tileBubbles.length - _kSdfMaxBubbles;
         tileBubbles.length = _kSdfMaxBubbles;
       }
       if (tileSpots.length > _kSdfMaxSpots) {
-        tileSpots.sort(_compareSpotDistance);
         _manager.statSdfDropped += tileSpots.length - _kSdfMaxSpots;
         tileSpots.length = _kSdfMaxSpots;
       }
@@ -249,27 +283,57 @@ class _MetaballRenderer {
     _emitTile(canvas, left, top, right, bottom, tileBubbles, tileSpots);
   }
 
-  int _compareBubbleDistance(int a, int b) {
-    final ba = _manager.bubbles[a];
-    final bb = _manager.bubbles[b];
-    final da = _distanceToTrimCenter(ba.position) - ba.radius;
-    final db = _distanceToTrimCenter(bb.position) - bb.radius;
-    return da.compareTo(db);
+  static int _compareBubbleKeyAscending(_Bubble a, _Bubble b) =>
+      a.sortKey.compareTo(b.sortKey);
+
+  static int _compareSpotKeyDescending(_MaskPoint a, _MaskPoint b) =>
+      b.sortKey.compareTo(a.sortKey);
+
+  /// Sorts [spots] by the alpha each one is guaranteed to have everywhere in the tile
+  /// (strongest first) and drops the tail once the strongest ones already make the mask opaque
+  /// in the whole tile: the dropped spots can't change the 8-bit result.
+  void _cullSaturatedSpots(
+    List<_MaskPoint> spots,
+    double left,
+    double top,
+    double right,
+    double bottom,
+  ) {
+    for (int k = 0; k < spots.length; k++) {
+      final s = spots[k];
+      // Farthest tile point from the spot center.
+      final dx = max(
+        (s.position.dx - left).abs(),
+        (s.position.dx - right).abs(),
+      );
+      final dy = max(
+        (s.position.dy - top).abs(),
+        (s.position.dy - bottom).abs(),
+      );
+      final t = ((sqrt(dx * dx + dy * dy) / s.radius - 0.05) / 0.95).clamp(
+        0.0,
+        1.0,
+      );
+      s.sortKey = 1 - t;
+    }
+    spots.sort(_compareSpotKeyDescending);
+
+    double keep = 1;
+    for (int k = 0; k < spots.length; k++) {
+      keep *= 1 - spots[k].sortKey;
+      if (keep < _kSdfSaturatedKeep) {
+        _frameCulled += spots.length - (k + 1);
+        spots.length = k + 1;
+        return;
+      }
+    }
   }
 
-  int _compareSpotDistance(int a, int b) {
-    final sa = _manager.maskPoints[a];
-    final sb = _manager.maskPoints[b];
-    final da = _distanceToTrimCenter(sa.position) - sa.radius;
-    final db = _distanceToTrimCenter(sb.position) - sb.radius;
-    return da.compareTo(db);
-  }
-
-  double _distanceToTrimCenter(Offset p) {
-    final dx = p.dx - _trimCx;
-    final dy = p.dy - _trimCy;
-    return sqrt(dx * dx + dy * dy);
-  }
+  static double _packRgb(Color c) =>
+      (((c.r * 255).round() << 16) |
+              ((c.g * 255).round() << 8) |
+              (c.b * 255).round())
+          .toDouble();
 
   void _emitTile(
     Canvas canvas,
@@ -277,50 +341,87 @@ class _MetaballRenderer {
     double top,
     double right,
     double bottom,
-    List<int> tileBubbles,
-    List<int> tileSpots,
+    List<_Bubble> tileBubbles,
+    List<_MaskPoint> tileSpots,
   ) {
-    final bubbles = _manager.bubbles;
-    final spots = _manager.maskPoints;
-
     final shaderIndex = _shaderIndex++;
     while (_shaders.length <= shaderIndex) {
       _shaders.add(program.fragmentShader());
     }
     final shader = _shaders[shaderIndex];
 
-    shader
-      ..setFloat(0, _kSdfSmoothing)
-      ..setFloat(1, _pixelSize)
-      ..setFloat(2, _kSdfColorSharpness)
-      ..setFloat(3, tileBubbles.length.toDouble())
-      ..setFloat(4, tileSpots.length.toDouble());
+    final bubbleCount = tileBubbles.length;
+    final pairCount = (bubbleCount + 1) ~/ 2;
+    final spotCount = tileSpots.length;
+    final groupCount = (spotCount + 3) ~/ 4;
 
-    for (int k = 0; k < tileBubbles.length; k++) {
-      final b = bubbles[tileBubbles[k]];
-      final color = b.color;
-      final mask = b.colorMask;
-      final base = k * 4;
-      shader
-        ..setFloat(_kSdfBubblesBase + base, b.position.dx)
-        ..setFloat(_kSdfBubblesBase + base + 1, b.position.dy)
-        ..setFloat(_kSdfBubblesBase + base + 2, b.radius)
-        ..setFloat(_kSdfBubblesBase + base + 3, b.opacity)
-        ..setFloat(_kSdfColorsBase + base, color.r)
-        ..setFloat(_kSdfColorsBase + base + 1, color.g)
-        ..setFloat(_kSdfColorsBase + base + 2, color.b)
-        ..setFloat(_kSdfMaskColorsBase + base, mask.r)
-        ..setFloat(_kSdfMaskColorsBase + base + 1, mask.g)
-        ..setFloat(_kSdfMaskColorsBase + base + 2, mask.b);
+    double refRadius = 0;
+    for (int k = 0; k < bubbleCount; k++) {
+      refRadius = max(refRadius, tileBubbles[k].radius);
     }
 
-    for (int k = 0; k < tileSpots.length; k++) {
-      final s = spots[tileSpots[k]];
-      final base = _kSdfSpotsBase + k * 4;
-      shader
-        ..setFloat(base, s.position.dx)
-        ..setFloat(base + 1, s.position.dy)
-        ..setFloat(base + 2, s.radius);
+    shader
+      ..setFloat(0, _kSdfSmoothing)
+      ..setFloat(1, _pixelSize * _kSdfAaWidth)
+      ..setFloat(2, 1 / _kSdfColorFade)
+      ..setFloat(3, _kSdfDepthClamp)
+      ..setFloat(4, _kSdfSizeBias)
+      ..setFloat(5, refRadius)
+      ..setFloat(6, pairCount.toDouble())
+      ..setFloat(7, groupCount.toDouble());
+
+    for (int k = 0; k < pairCount * 2; k++) {
+      final pair = k ~/ 2;
+      final odd = k.isOdd;
+      final base = (odd ? _kSdfBubblesBBase : _kSdfBubblesABase) + pair * 4;
+      final colorBase = _kSdfColorsBase + pair * 4 + (odd ? 2 : 0);
+      if (k < bubbleCount) {
+        final b = tileBubbles[k];
+        shader
+          ..setFloat(base, b.position.dx)
+          ..setFloat(base + 1, b.position.dy)
+          ..setFloat(base + 2, b.radius)
+          ..setFloat(base + 3, b.opacity)
+          ..setFloat(colorBase, _packRgb(b.color))
+          ..setFloat(colorBase + 1, _packRgb(b.colorMask));
+      } else {
+        // Padding: far away, zero radius and opacity, so it adds no shape and no weight.
+        shader
+          ..setFloat(base, -100000)
+          ..setFloat(base + 1, -100000)
+          ..setFloat(base + 2, 0)
+          ..setFloat(base + 3, 0)
+          ..setFloat(colorBase, 0)
+          ..setFloat(colorBase + 1, 0);
+      }
+    }
+
+    for (int k = 0; k < groupCount * 4; k++) {
+      final double x, y, r;
+      if (k < spotCount) {
+        final s = tileSpots[k];
+        x = s.position.dx;
+        y = s.position.dy;
+        r = s.radius;
+      } else {
+        // Padding: far away, so its alpha is 0.
+        x = -100000;
+        y = -100000;
+        r = 1;
+      }
+      // Spot k of group g occupies floats 3k..3k+2 of the group's 12 floats in A, B, C.
+      final group = k ~/ 4;
+      final first = (k % 4) * 3;
+      for (int c = 0; c < 3; c++) {
+        final slot = first + c;
+        final arrayBase = slot < 4
+            ? _kSdfSpotsABase
+            : (slot < 8 ? _kSdfSpotsBBase : _kSdfSpotsCBase);
+        shader.setFloat(
+          arrayBase + group * 4 + slot % 4,
+          c == 0 ? x : (c == 1 ? y : r),
+        );
+      }
     }
 
     _frameTiles++;

@@ -142,7 +142,9 @@ class _PerfOverlayState extends State<_PerfOverlay>
         'tiles ${m.statSdfTiles} (splits ${m.statSdfSplits}) · '
         'max bubbles/tile ${m.statSdfMaxTileBubbles} · '
         'max spots/tile ${m.statSdfMaxTileSpots} · '
+        'culled spots ${m.statSdfCulled} · '
         'dropped ${m.statSdfDropped} · '
+        '${_sdfTunablesLine()} · '
         'logical ${size?.width.round()}×${size?.height.round()} · '
         'DPR $dpr · $_renderer · px/bubble $_kPixelsPerOneBubble · '
         'crossOriginIsolated $perfCrossOriginIsolated';
