@@ -23,6 +23,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
   static const _runs = 3;
 
   int _runIndex = 0;
+  bool _startReported = false;
   static const _renderer = bool.fromEnvironment('dart.tool.dart2wasm')
       ? 'skwasm (wasm)'
       : 'canvaskit (js)';
@@ -68,6 +69,12 @@ class _PerfOverlayState extends State<_PerfOverlay>
 
     final intervalUs = (elapsed - last).inMicroseconds;
     _liveFrames++;
+
+    // Early report so the setup (sizes, counts) can be checked without waiting for results.
+    if (!_startReported && elapsed >= const Duration(seconds: 3)) {
+      _startReported = true;
+      reportPerfResult('[perf] start | ${_statsLine()}');
+    }
 
     switch (_phase) {
       case .warmUp:
