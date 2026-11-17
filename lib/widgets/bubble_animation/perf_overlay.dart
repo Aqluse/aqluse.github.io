@@ -20,6 +20,9 @@ class _PerfOverlayState extends State<_PerfOverlay>
   static const _warmUp = Duration(seconds: 10);
   static const _window = Duration(seconds: 30);
   static const _refresh = Duration(milliseconds: 500);
+  static const _runs = 3;
+
+  int _runIndex = 0;
   static const _renderer = bool.fromEnvironment('dart.tool.dart2wasm')
       ? 'skwasm (wasm)'
       : 'canvaskit (js)';
@@ -54,6 +57,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
     _phaseStart = _lastFrame ?? Duration.zero;
     _intervalsUs.clear();
     _result = null;
+    _runIndex = 0;
     setState(() {});
   }
 
@@ -77,9 +81,17 @@ class _PerfOverlayState extends State<_PerfOverlay>
         if (elapsed - _phaseStart >= _window) {
           _phase = .done;
           _result = _computeResult();
-          final line = '[perf] $_result | ${_statsLine()}';
+          _runIndex++;
+          final line =
+              '[perf] run $_runIndex/$_runs $_result | ${_statsLine()}';
           debugPrint(line);
           reportPerfResult(line);
+          if (_runIndex < _runs) {
+            // Next run without warm-up: the scene is already warmed up.
+            _phase = .measuring;
+            _phaseStart = elapsed;
+            _intervalsUs.clear();
+          }
         }
       case .done:
         break;
@@ -128,8 +140,9 @@ class _PerfOverlayState extends State<_PerfOverlay>
         'warm-up ${(_lastFrame ?? Duration.zero).inSeconds - _phaseStart.inSeconds}'
             '/${_warmUp.inSeconds}s',
       .measuring =>
-        'measuring ${(_lastFrame ?? Duration.zero).inSeconds - _phaseStart.inSeconds}'
-            '/${_window.inSeconds}s',
+        'run ${_runIndex + 1}/$_runs: measuring '
+            '${(_lastFrame ?? Duration.zero).inSeconds - _phaseStart.inSeconds}'
+            '/${_window.inSeconds}s${_result == null ? '' : '\nlast: $_result'}',
       .done => '$_result (tap to restart)',
     };
 
