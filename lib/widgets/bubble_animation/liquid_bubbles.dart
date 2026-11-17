@@ -5,9 +5,12 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import 'perf_report.dart';
+
 part 'objects.dart';
 part 'paint_manager.dart';
 part 'painter.dart';
+part 'perf_overlay.dart';
 
 const double? _kDebugBubbleRadius = null; //100;
 const bool _kDebugModeDrawBridgeOnTop = false;
@@ -77,9 +80,22 @@ class _LiquidBubblesState extends State<LiquidBubbles>
     return LayoutBuilder(
       builder: (context, constraints) {
         _manager.updateSize(Size(constraints.maxWidth, constraints.maxHeight));
-        return GestureDetector(
+        final bubbles = GestureDetector(
           onTapDown: (d) => _manager.handleTap(d.localPosition),
           child: _CustomPaint(painter: _painter, child: widget.child),
+        );
+        if (!_kPerfOverlay) return bubbles;
+
+        return Stack(
+          fit: .expand,
+          children: [
+            bubbles,
+            Positioned(
+              left: 16,
+              top: 16,
+              child: RepaintBoundary(child: _PerfOverlay(manager: _manager)),
+            ),
+          ],
         );
       },
     );
