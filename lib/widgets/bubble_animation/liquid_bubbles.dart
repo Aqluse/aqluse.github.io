@@ -7,6 +7,7 @@ import 'package:flutter/scheduler.dart';
 
 import 'perf_report.dart';
 
+part 'metaballs.dart';
 part 'objects.dart';
 part 'paint_manager.dart';
 part 'painter.dart';
@@ -51,6 +52,12 @@ class _LiquidBubblesState extends State<LiquidBubbles>
   void initState() {
     super.initState();
     _painter = _Painter(manager: _manager);
+    if (_kUseSdf) {
+      ui.FragmentProgram.fromAsset('shaders/metaballs.frag').then(
+        (program) => _painter.metaballProgram = program,
+        onError: (Object e) => debugPrint('metaballs.frag failed to load: $e'),
+      );
+    }
 
     _ticker = createTicker((elapsed) {
       final lastElapsed = _lastElapsed;
@@ -80,6 +87,7 @@ class _LiquidBubblesState extends State<LiquidBubbles>
     return LayoutBuilder(
       builder: (context, constraints) {
         _manager.updateSize(Size(constraints.maxWidth, constraints.maxHeight));
+        _painter.devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
         final bubbles = GestureDetector(
           onTapDown: (d) => _manager.handleTap(d.localPosition),
           child: _CustomPaint(painter: _painter, child: widget.child),

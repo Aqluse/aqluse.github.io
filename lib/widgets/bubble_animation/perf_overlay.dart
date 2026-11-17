@@ -82,6 +82,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
           _phase = .measuring;
           _phaseStart = elapsed;
           _intervalsUs.clear();
+          widget.manager.resetSdfStats();
         }
       case .measuring:
         _intervalsUs.add(intervalUs);
@@ -98,6 +99,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
             _phase = .measuring;
             _phaseStart = elapsed;
             _intervalsUs.clear();
+            widget.manager.resetSdfStats();
           }
         }
       case .done:
@@ -136,6 +138,11 @@ class _PerfOverlayState extends State<_PerfOverlay>
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return 'bubbles ${m.bubbles.length} · masks ${m.maskPoints.length} · '
         'bridges ${m.bridges.length} · '
+        'renderer ${_kUseSdf ? 'sdf' : 'legacy'} · '
+        'tiles ${m.statSdfTiles} (splits ${m.statSdfSplits}) · '
+        'max bubbles/tile ${m.statSdfMaxTileBubbles} · '
+        'max spots/tile ${m.statSdfMaxTileSpots} · '
+        'dropped ${m.statSdfDropped} · '
         'logical ${size?.width.round()}×${size?.height.round()} · '
         'DPR $dpr · $_renderer · '
         'crossOriginIsolated $perfCrossOriginIsolated';
