@@ -15,20 +15,33 @@ class _Painter extends CustomPainter {
 
   final Color _transparentWhite = Colors.white.withValues(alpha: 0);
 
-  /// Max spots passed to the bubble shader; must match kMaxSpots in shaders/bubble.frag.
-  static const int _kMaxShaderSpots = 32;
+  /// Max spots passed to a shader; must match kMaxSpots in shaders/bubble.frag and
+  /// shaders/bridge.frag.
+  static const int _kMaxShaderSpots = 64;
 
-  /// Set once shaders/bubble.frag is loaded; until then bubbles are drawn the old way.
+  /// Set once the shaders are loaded; until then everything is drawn the old way.
   ui.FragmentProgram? bubbleProgram;
+  ui.FragmentProgram? bridgeProgram;
 
-  // One shader instance per drawn bubble, reused across frames, so uniforms of different
-  // bubbles never share an instance within a frame.
+  // One shader instance per drawn object, reused across frames, so uniforms of different
+  // objects never share an instance within a frame.
   final List<ui.FragmentShader> _bubbleShaders = [];
+  final List<ui.FragmentShader> _bridgeShaders = [];
+  int _bridgeShaderIndex = 0;
   final Paint _bubbleShaderPaint = Paint();
+  final Paint _bridgeShaderPaint = Paint();
   final List<_MaskPoint> _bubbleSpots = [];
+  final List<_MaskPoint> _bridgeSpots = [];
+  final List<double> _bridgeSpotTs = [];
+
+  /// Whether some object in the current frame had more spots than the shader capacity.
+  bool _frameOverflow = false;
 
   @override
   void paint(Canvas canvas, Size size) {
+    _bridgeShaderIndex = 0;
+    _frameOverflow = false;
+
     if (!_kDebugModeDrawBridgeOnTop) {
       for (final bridge in manager.bridges) {
         _drawBridge(canvas: canvas, bridge: bridge);
@@ -87,10 +100,98 @@ class _Painter extends CustomPainter {
         _drawBridge(canvas: canvas, bridge: bridge);
       }
     }
+
+    if (_frameOverflow) manager.statOverflowFrames++;
   }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+
+  void _drawBridgeMaskSpot(
+    Canvas canvas,
+    _Bubble b1,
+    _Bubble b2,
+    _MaskPoint spot,
+    double t,
+  ) {
+    final spotColor = Color.lerp(b1.colorMask, b2.colorMask, t)!;
+    _bridgeMaskPaint.shader = ui.Gradient.radial(
+      spot.position,
+      spot.radius,
+      [spotColor, spotColor.withAlpha(0)],
+      const [0.05, 1.0],
+    );
+
+    canvas.drawPath(_bridgePath, _bridgeMaskPaint);
+  }
+
+  /// Draws the bridge base gradient and its mask spots in a single call via
+  /// shaders/bridge.frag. Spots beyond [_kMaxShaderSpots] are drawn the old way on top.
+  void _drawBridgeWithShader(
+    Canvas canvas,
+    _Bubble b1,
+    _Bubble b2,
+    double s1,
+    double s2,
+    ui.FragmentProgram program,
+  ) {
+    final spotCount = _bridgeSpots.length;
+    if (spotCount > manager.statMaxBridgeSpots) {
+      manager.statMaxBridgeSpots = spotCount;
+    }
+    final overflow = spotCount > _kMaxShaderSpots;
+    if (overflow) _frameOverflow = true;
+    final shaderSpotCount = overflow ? _kMaxShaderSpots : spotCount;
+
+    final shaderIndex = _bridgeShaderIndex++;
+    while (_bridgeShaders.length <= shaderIndex) {
+      _bridgeShaders.add(program.fragmentShader());
+    }
+    final shader = _bridgeShaders[shaderIndex];
+
+    final c1 = b1.color, c2 = b2.color;
+    final m1 = b1.colorMask, m2 = b2.colorMask;
+    shader
+      ..setFloat(0, b1.position.dx)
+      ..setFloat(1, b1.position.dy)
+      ..setFloat(2, b2.position.dx)
+      ..setFloat(3, b2.position.dy)
+      ..setFloat(4, c1.r)
+      ..setFloat(5, c1.g)
+      ..setFloat(6, c1.b)
+      ..setFloat(7, c1.a)
+      ..setFloat(8, c2.r)
+      ..setFloat(9, c2.g)
+      ..setFloat(10, c2.b)
+      ..setFloat(11, c2.a)
+      ..setFloat(12, s1)
+      ..setFloat(13, s2)
+      ..setFloat(14, m1.r)
+      ..setFloat(15, m1.g)
+      ..setFloat(16, m1.b)
+      ..setFloat(17, m1.a)
+      ..setFloat(18, m2.r)
+      ..setFloat(19, m2.g)
+      ..setFloat(20, m2.b)
+      ..setFloat(21, m2.a)
+      ..setFloat(22, shaderSpotCount.toDouble());
+    for (int s = 0; s < shaderSpotCount; s++) {
+      final spot = _bridgeSpots[s];
+      final base = 23 + s * 4;
+      shader
+        ..setFloat(base, spot.position.dx)
+        ..setFloat(base + 1, spot.position.dy)
+        ..setFloat(base + 2, spot.radius)
+        ..setFloat(base + 3, _bridgeSpotTs[s]);
+    }
+
+    _bridgeShaderPaint.shader = shader;
+    canvas.drawPath(_bridgePath, _bridgeShaderPaint);
+
+    for (int s = _kMaxShaderSpots; s < spotCount; s++) {
+      _drawBridgeMaskSpot(canvas, b1, b2, _bridgeSpots[s], _bridgeSpotTs[s]);
+    }
+  }
 
   bool _spotTouchesBubble(_MaskPoint spot, _Bubble b) {
     final dx = b.position.dx - spot.position.dx;
@@ -144,6 +245,7 @@ class _Painter extends CustomPainter {
       manager.statMaxBubbleSpots = spotCount;
     }
     final overflow = spotCount > _kMaxShaderSpots;
+    if (overflow) _frameOverflow = true;
     final shaderSpotCount = overflow ? _kMaxShaderSpots : spotCount;
 
     while (_bubbleShaders.length <= shaderIndex) {
@@ -319,19 +421,26 @@ class _Painter extends CustomPainter {
       s1 = s2 = ratio;
     }
 
-    if (b1.color == b2.color) {
-      _bridgePaint.shader = null;
-      _bridgePaint.color = b1.color;
-    } else {
-      _bridgePaint.shader = ui.Gradient.linear(
-        b1.position,
-        b2.position,
-        [b1.color, b1.color, b2.color, b2.color],
-        [0, s1, s2, 1],
-      );
-    }
+    // With the shader, the base and the masks are drawn in one call after collecting the spots.
+    final program = _kUseShaders ? bridgeProgram : null;
+    _bridgeSpots.clear();
+    _bridgeSpotTs.clear();
 
-    canvas.drawPath(_bridgePath, _bridgePaint);
+    if (program == null) {
+      if (b1.color == b2.color) {
+        _bridgePaint.shader = null;
+        _bridgePaint.color = b1.color;
+      } else {
+        _bridgePaint.shader = ui.Gradient.linear(
+          b1.position,
+          b2.position,
+          [b1.color, b1.color, b2.color, b2.color],
+          [0, s1, s2, 1],
+        );
+      }
+
+      canvas.drawPath(_bridgePath, _bridgePaint);
+    }
 
     for (final spot in manager.maskPoints) {
       // Path masks severely degrade performance;
@@ -390,15 +499,17 @@ class _Painter extends CustomPainter {
         continue; // Реальная перекрестная область на мосту 100% накрыта!
       }*/
 
-      final spotColor = Color.lerp(b1.colorMask, b2.colorMask, t)!;
-      _bridgeMaskPaint.shader = ui.Gradient.radial(
-        spot.position,
-        spot.radius,
-        [spotColor, spotColor.withAlpha(0)],
-        const [0.05, 1.0],
-      );
+      if (program != null) {
+        _bridgeSpots.add(spot);
+        _bridgeSpotTs.add(t);
+        continue;
+      }
 
-      canvas.drawPath(_bridgePath, _bridgeMaskPaint);
+      _drawBridgeMaskSpot(canvas, b1, b2, spot, t);
+    }
+
+    if (program != null) {
+      _drawBridgeWithShader(canvas, b1, b2, s1, s2, program);
     }
 
     // TODO: Control points for drawing a curved line (for debug)

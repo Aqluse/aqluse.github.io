@@ -6,7 +6,7 @@ precision highp float;
 
 // Capacity, not a selection: every spot touching the bubble is passed (uSpotCount of them);
 // spots beyond the capacity are drawn by the caller the old way.
-const int kMaxSpots = 32;
+const int kMaxSpots = 64;
 
 // Float indices are listed for setFloat() in painter.dart.
 uniform vec2 uCenter;           // 0-1
@@ -15,7 +15,7 @@ uniform vec4 uColor;            // 3-6, straight alpha (alpha = opacity)
 uniform vec4 uMaskColor;        // 7-10, straight alpha (alpha = opacity)
 uniform float uGlowAlpha;       // 11, 0 = no glow
 uniform float uSpotCount;       // 12
-uniform vec4 uSpots[kMaxSpots]; // 13-140, xyz = center x, center y, radius
+uniform vec4 uSpots[kMaxSpots]; // 13-268, xyz = center x, center y, radius
 
 out vec4 fragColor;
 

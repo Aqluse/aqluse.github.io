@@ -82,6 +82,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
           _phase = .measuring;
           _phaseStart = elapsed;
           _intervalsUs.clear();
+          widget.manager.statOverflowFrames = 0;
         }
       case .measuring:
         _intervalsUs.add(intervalUs);
@@ -98,6 +99,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
             _phase = .measuring;
             _phaseStart = elapsed;
             _intervalsUs.clear();
+            widget.manager.statOverflowFrames = 0;
           }
         }
       case .done:
@@ -138,6 +140,8 @@ class _PerfOverlayState extends State<_PerfOverlay>
         'bridges ${m.bridges.length} · '
         'shader ${_kUseShaders ? 'on' : 'off'} · '
         'max spots/bubble ${m.statMaxBubbleSpots} · '
+        'max spots/bridge ${m.statMaxBridgeSpots} · '
+        'overflow frames ${m.statOverflowFrames} · '
         'logical ${size?.width.round()}×${size?.height.round()} · '
         'DPR $dpr · $_renderer · '
         'crossOriginIsolated $perfCrossOriginIsolated';

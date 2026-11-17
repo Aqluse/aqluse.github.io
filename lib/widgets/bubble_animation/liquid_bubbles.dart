@@ -59,6 +59,10 @@ class _LiquidBubblesState extends State<LiquidBubbles>
         (program) => _painter.bubbleProgram = program,
         onError: (Object e) => debugPrint('bubble.frag failed to load: $e'),
       );
+      ui.FragmentProgram.fromAsset('shaders/bridge.frag').then(
+        (program) => _painter.bridgeProgram = program,
+        onError: (Object e) => debugPrint('bridge.frag failed to load: $e'),
+      );
     }
 
     _ticker = createTicker((elapsed) {
