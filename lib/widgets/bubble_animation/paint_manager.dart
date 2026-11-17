@@ -9,6 +9,21 @@ class _PaintManager extends ChangeNotifier {
 
   Size get _canvasSize => _canvasSizeRaw!;
   bool _canvasSizeUpdated = false;
+
+  /// PERF: metaball renderer stats (filled by _MetaballRenderer). Tiles and splits are per
+  /// frame; max values and dropped objects accumulate (reset when a measuring phase starts).
+  int statSdfTiles = 0;
+  int statSdfSplits = 0;
+  int statSdfMaxTileBubbles = 0;
+  int statSdfMaxTileSpots = 0;
+  int statSdfDropped = 0;
+
+  void resetSdfStats() {
+    statSdfMaxTileBubbles = 0;
+    statSdfMaxTileSpots = 0;
+    statSdfDropped = 0;
+  }
+
   final _SortedBubbleList bubbles = _SortedBubbleList();
   Set<_BubbleBridge> bridges = {};
   List<_MaskPoint> maskPoints = [];

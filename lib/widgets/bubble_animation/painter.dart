@@ -15,8 +15,24 @@ class _Painter extends CustomPainter {
 
   final Color _transparentWhite = Colors.white.withValues(alpha: 0);
 
+  /// Used for anti-aliasing of the metaballs' edge.
+  double devicePixelRatio = 1;
+
+  /// Set once shaders/metaballs.frag is loaded; until then everything is drawn the old way.
+  _MetaballRenderer? _metaballs;
+
+  set metaballProgram(ui.FragmentProgram program) {
+    _metaballs = _MetaballRenderer(program);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
+    final metaballs = _metaballs;
+    if (metaballs != null) {
+      metaballs.paint(canvas, size, manager, 1 / devicePixelRatio);
+      return;
+    }
+
     if (!_kDebugModeDrawBridgeOnTop) {
       for (final bridge in manager.bridges) {
         _drawBridge(canvas: canvas, bridge: bridge);
