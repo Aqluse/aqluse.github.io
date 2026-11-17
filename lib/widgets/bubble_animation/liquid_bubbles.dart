@@ -16,7 +16,11 @@ const double? _kDebugBubbleRadius = null; //100;
 const bool _kDebugModeDrawBridgeOnTop = false;
 const bool _kDebugModeHighlightMaskPoints = false;
 
-const int _kPixelsPerOneBubble = 30_000; //75_000; //30_000; //100_000;
+// PERF: overridable via --dart-define=PERF_PIXELS_PER_BUBBLE=...
+const int _kPixelsPerOneBubble = int.fromEnvironment(
+  'PERF_PIXELS_PER_BUBBLE',
+  defaultValue: 30_000,
+); //75_000; //30_000; //100_000;
 
 /// Draw bubbles with shaders/bubble.frag; `--dart-define=PERF_SHADER=off` forces the old way.
 const bool _kUseShaders = String.fromEnvironment('PERF_SHADER') != 'off';

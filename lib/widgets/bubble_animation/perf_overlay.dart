@@ -143,7 +143,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
         'max spots/bridge ${m.statMaxBridgeSpots} · '
         'overflow frames ${m.statOverflowFrames} · '
         'logical ${size?.width.round()}×${size?.height.round()} · '
-        'DPR $dpr · $_renderer · '
+        'DPR $dpr · $_renderer · px/bubble $_kPixelsPerOneBubble · '
         'crossOriginIsolated $perfCrossOriginIsolated';
   }
 
