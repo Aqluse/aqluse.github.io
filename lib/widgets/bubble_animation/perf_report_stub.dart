@@ -1,0 +1,1 @@
+void reportPerfResult(String text) {}
