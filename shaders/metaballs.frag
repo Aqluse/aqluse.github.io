@@ -94,11 +94,22 @@ void main() {
   float stackGlow = 0.0;
   float stackKeep = 1.0;
 
+  // Layered necks: nDist = smooth union of the lower bubbles this pixel is OUTSIDE of, with their
+  // weighted value sums. A bubble's neck with them is the area their smooth union adds beyond
+  // the shapes themselves; it is stacked at that bubble's layer, so necks between upper bubbles
+  // stay visible over lower bubbles and are hidden by higher ones (the old renderer's order).
+  float nDist = 100000.0;
+  float nW = 0.0;
+  vec4 nSurface = vec4(0.0);
+  vec4 nMask = vec4(0.0);
+  float nGlow = 0.0;
+
   int pairs = int(uParams1.z);
   for (int i = 0; i < kMaxBubblePairs; i++) {
     if (i >= pairs) break;
     vec4 colors = uColors[i];
 
+    // ---- Bubble 2i (same code as bubble 2i + 1 below) ----
     vec4 b = uBubblesA[i];
     float di = distance(p, b.xy) - b.z;
     d = smin(d, di, k);
@@ -110,12 +121,35 @@ void main() {
     surface += w * bs;
     mask += w * bm;
     glow += w * bg;
+    // Neck with the lower outside bubbles: only the coverage added by the smooth union.
+    float dn = smin(di, nDist, k);
+    float cn = stacking * max(
+        clamp(0.5 - dn / edge, 0.0, 1.0) - clamp(0.5 - min(di, nDist) / edge, 0.0, 1.0),
+        0.0);
+    float nwi = nW + w;
+    if (cn > 0.0 && nwi > 0.0) {
+      float invN = 1.0 / nwi;
+      stackSurface = mix(stackSurface, (nSurface + w * bs) * invN, cn);
+      stackMask = mix(stackMask, (nMask + w * bm) * invN, cn);
+      stackGlow = mix(stackGlow, (nGlow + w * bg) * invN, cn);
+      stackKeep *= 1.0 - cn;
+    }
+    // The bubble itself, on top of its neck.
     float ci = stacking * clamp(0.5 - di / edge, 0.0, 1.0);
     stackSurface = mix(stackSurface, bs, ci);
     stackMask = mix(stackMask, bm, ci);
     stackGlow = mix(stackGlow, bg, ci);
     stackKeep *= 1.0 - ci;
+    // Remember it for the necks of higher bubbles, unless the pixel is inside it.
+    if (di >= 0.0) {
+      nDist = smin(nDist, di, k);
+      nW += w;
+      nSurface += w * bs;
+      nMask += w * bm;
+      nGlow += w * bg;
+    }
 
+    // ---- Bubble 2i + 1 ----
     b = uBubblesB[i];
     di = distance(p, b.xy) - b.z;
     d = smin(d, di, k);
@@ -127,11 +161,30 @@ void main() {
     surface += w * bs;
     mask += w * bm;
     glow += w * bg;
+    dn = smin(di, nDist, k);
+    cn = stacking * max(
+        clamp(0.5 - dn / edge, 0.0, 1.0) - clamp(0.5 - min(di, nDist) / edge, 0.0, 1.0),
+        0.0);
+    nwi = nW + w;
+    if (cn > 0.0 && nwi > 0.0) {
+      float invN = 1.0 / nwi;
+      stackSurface = mix(stackSurface, (nSurface + w * bs) * invN, cn);
+      stackMask = mix(stackMask, (nMask + w * bm) * invN, cn);
+      stackGlow = mix(stackGlow, (nGlow + w * bg) * invN, cn);
+      stackKeep *= 1.0 - cn;
+    }
     ci = stacking * clamp(0.5 - di / edge, 0.0, 1.0);
     stackSurface = mix(stackSurface, bs, ci);
     stackMask = mix(stackMask, bm, ci);
     stackGlow = mix(stackGlow, bg, ci);
     stackKeep *= 1.0 - ci;
+    if (di >= 0.0) {
+      nDist = smin(nDist, di, k);
+      nW += w;
+      nSurface += w * bs;
+      nMask += w * bm;
+      nGlow += w * bg;
+    }
   }
 
   // Anti-aliased coverage over the AA width.
