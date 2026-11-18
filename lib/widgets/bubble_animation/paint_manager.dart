@@ -327,16 +327,23 @@ class _PaintManager extends ChangeNotifier {
 
       // TODO: дублирование с paint
       final offset = b.radius * 0.2;
-      final glowCenter = b.position - Offset(offset, offset);
+      // Only allocated once a candidate needs it.
+      late final glowCenter = b.position - Offset(offset, offset);
       final glowRadius = b.radius * 0.8;
 
       // Same result as scanning later bubbles from the last one and stopping at the first that
       // covers the bubble or its glow: track the highest index for each condition.
       int coverIndex = -1;
       int glowIndex = -1;
-      final near = bubbleGrid.query(
-        b.position,
-        maxBubble + offset * 1.5,
+      // A cover is within later.r - r of the center; a glow cover within
+      // later.r - 0.8r + 0.2 * sqrt(2) * r < later.r - 0.5r (the glow center is 0.2r off on
+      // both axes). Both are within maxBubbleRadius - 0.5r.
+      final reach = maxBubble - 0.5 * b.radius;
+      final near = bubbleGrid.queryBounds(
+        b.position.dx - reach,
+        b.position.dy - reach,
+        b.position.dx + reach,
+        b.position.dy + reach,
         _nearBubbles,
       );
       for (final later in near) {
@@ -402,7 +409,7 @@ class _PaintManager extends ChangeNotifier {
         if (m.covered(b)) continue;
       }*/
 
-    _updateBridges(maxBubble);
+    _updateBridges();
 
     notifyListeners();
     _canvasSizeUpdated = false;
@@ -421,9 +428,9 @@ class _PaintManager extends ChangeNotifier {
   /// Connects touching visible bubbles and disconnects stretched-out bridges.
   ///
   /// Same rules as checking every pair, but new bridges are searched only among grid neighbors
-  /// (touching bubbles are at most `2 * maxRadius` apart) and existing ones are checked directly,
-  /// with no temporary objects.
-  void _updateBridges(double maxRadius) {
+  /// (touching bubbles are at most `2 * maxBubbleRadius` apart) and existing ones are checked
+  /// directly, with no temporary objects.
+  void _updateBridges() {
     double getDisconnectBridgeLength(_Bubble b1, _Bubble b2) {
       // TODO: The scientific formula is there, but the drawing of the bridge is not perfect using it yet.
       //(2 * b1.radius * b2.radius) / (b1.radius + b2.radius);
@@ -435,7 +442,9 @@ class _PaintManager extends ChangeNotifier {
       final b2 = bridge.bubble2;
       if (!b1.visible || !b2.visible) return false;
 
-      final distSquared = (b1.position - b2.position).distanceSquared;
+      final dx = b1.position.dx - b2.position.dx;
+      final dy = b1.position.dy - b2.position.dy;
+      final distSquared = dx * dx + dy * dy;
       final effectiveDisconnectBridgeLength =
           b1.radius + b2.radius + getDisconnectBridgeLength(b1, b2);
       return distSquared >
@@ -445,16 +454,23 @@ class _PaintManager extends ChangeNotifier {
     for (final b1 in bubbles) {
       if (!b1.visible) continue;
 
-      final near = bubbleGrid.query(
-        b1.position,
-        b1.radius + maxRadius,
+      final x1 = b1.position.dx;
+      final y1 = b1.position.dy;
+      final reach = b1.radius + maxBubbleRadius;
+      final near = bubbleGrid.queryBounds(
+        x1 - reach,
+        y1 - reach,
+        x1 + reach,
+        y1 + reach,
         _nearBubbles,
       );
       for (final b2 in near) {
         // Each pair once, with bubble1 being the earlier one (as with the pairwise loop).
         if (b2.index <= b1.index || !b2.visible) continue;
 
-        final distSquared = (b1.position - b2.position).distanceSquared;
+        final dx = x1 - b2.position.dx;
+        final dy = y1 - b2.position.dy;
+        final distSquared = dx * dx + dy * dy;
         final radiiSum = b1.radius + b2.radius;
         if (distSquared < radiiSum * radiiSum) {
           final key = _pairKey(b1, b2);

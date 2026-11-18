@@ -34,13 +34,20 @@ class _SpatialGrid<T> {
     _cells[_row(position.dy) * _cols + _col(position.dx)].add(item);
   }
 
-  /// Fills [out] with the objects in the cells overlapping [rect] and returns it.
-  List<T> queryRect(Rect rect, List<T> out) {
+  /// Fills [out] with the objects in the cells overlapping the rect from ([left], [top]) to
+  /// ([right], [bottom]) and returns it.
+  List<T> queryBounds(
+    double left,
+    double top,
+    double right,
+    double bottom,
+    List<T> out,
+  ) {
     out.clear();
     if (_cols == 0) return out;
 
-    final c0 = _col(rect.left), c1 = _col(rect.right);
-    final r0 = _row(rect.top), r1 = _row(rect.bottom);
+    final c0 = _col(left), c1 = _col(right);
+    final r0 = _row(top), r1 = _row(bottom);
     for (int r = r0; r <= r1; r++) {
       final rowStart = r * _cols;
       for (int c = c0; c <= c1; c++) {
@@ -50,10 +57,17 @@ class _SpatialGrid<T> {
     return out;
   }
 
+  /// Fills [out] with the objects in the cells overlapping [rect] and returns it.
+  List<T> queryRect(Rect rect, List<T> out) =>
+      queryBounds(rect.left, rect.top, rect.right, rect.bottom, out);
+
   /// Fills [out] with the objects in the cells overlapping the square of half-size [radius]
   /// around [center] and returns it.
-  List<T> query(Offset center, double radius, List<T> out) => queryRect(
-    Rect.fromCenter(center: center, width: radius * 2, height: radius * 2),
+  List<T> query(Offset center, double radius, List<T> out) => queryBounds(
+    center.dx - radius,
+    center.dy - radius,
+    center.dx + radius,
+    center.dy + radius,
     out,
   );
 }

@@ -29,6 +29,9 @@ class _Painter extends CustomPainter {
   final List<_Bubble> _nearBubbles = [];
   final List<_MaskPoint> _nearSpots = [];
 
+  static int _compareSpotIndex(_MaskPoint a, _MaskPoint b) =>
+      a.index.compareTo(b.index);
+
   @override
   void paint(Canvas canvas, Size size) {
     final metaballs = _metaballs;
@@ -279,7 +282,7 @@ class _Painter extends CustomPainter {
       nearSpots = manager.spotGrid.queryRect(
         Rect.fromPoints(b1.position, b2.position).inflate(reach),
         _nearSpots,
-      )..sort((a, b) => a.index.compareTo(b.index));
+      )..sort(_compareSpotIndex);
     }
 
     for (final spot in nearSpots) {

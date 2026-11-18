@@ -14,9 +14,6 @@ const double _kSdfEdgeFade = 2.75;
 /// How deep inside a bubble (logical px) its color weight keeps growing.
 const double _kSdfDepthClamp = 72;
 
-/// Extra color weight per logical px of radius (weights * exp(radius * bias)); 0 = off.
-const double _kSdfSizeBias = 0;
-
 /// Edge anti-aliasing width in physical pixels.
 const double _kSdfAaWidth = 1;
 
@@ -54,7 +51,6 @@ const int _kSdfEventsCBase = _kSdfEventsBBase + _kSdfMaxEvents ~/ 2 * 4;
 const int _kSdfSpotsABase = _kSdfEventsCBase + _kSdfMaxEvents ~/ 2 * 4;
 const int _kSdfSpotsBBase = _kSdfSpotsABase + _kSdfMaxSpots ~/ 4 * 4;
 const int _kSdfSpotsCBase = _kSdfSpotsBBase + _kSdfMaxSpots ~/ 4 * 4;
-const int _kSdfParams2Base = _kSdfSpotsCBase + _kSdfMaxSpots ~/ 4 * 4;
 
 // Event kinds, encoded in the event's w with the bubble's opacity o (see the shader).
 const int _kSdfEventDraw = 0; // w = o
@@ -69,6 +65,34 @@ const double _kSdfSaturatedKeep = 1 / 512;
 /// strength < 1 lets lower layers show through), it can't change the 8-bit output and is
 /// skipped (hidden necks and bubbles).
 const double _kSdfOccludedKeep = 1 / 1024;
+
+/// Squared distance from (x, y) to the nearest point of the rect.
+double _rectDistSq(
+  double x,
+  double y,
+  double left,
+  double top,
+  double right,
+  double bottom,
+) {
+  final dx = x < left ? left - x : (x > right ? x - right : 0.0);
+  final dy = y < top ? top - y : (y > bottom ? y - bottom : 0.0);
+  return dx * dx + dy * dy;
+}
+
+/// Squared distance from (x, y) to the farthest corner of the rect.
+double _farRectDistSq(
+  double x,
+  double y,
+  double left,
+  double top,
+  double right,
+  double bottom,
+) {
+  final dx = max((x - left).abs(), (x - right).abs());
+  final dy = max((y - top).abs(), (y - bottom).abs());
+  return dx * dx + dy * dy;
+}
 
 /// Two fusing bubbles (center distance < r1 + r2 + k): the area their smooth union adds to the
 /// two shapes (the neck) is drawn at the lower bubble's layer. Reused across frames.
@@ -95,6 +119,43 @@ class _SdfPair {
 
   // Scratch result of _part: x range along the axis, |y| range off it (local frame).
   double _x0 = 0, _x1 = 0, _y0 = 0, _y1 = 0;
+
+  // Bounds of all boxes.
+  double get minX => boxCount == 2 ? min(ax0, bx0) : ax0;
+  double get minY => boxCount == 2 ? min(ay0, by0) : ay0;
+  double get maxX => boxCount == 2 ? max(ax1, bx1) : ax1;
+  double get maxY => boxCount == 2 ? max(ay1, by1) : ay1;
+
+  /// Whether a box overlaps the rect.
+  bool hitsRect(double left, double top, double right, double bottom) =>
+      _boxHitsRect(ax0, ay0, ax1, ay1, left, top, right, bottom) ||
+      (boxCount == 2 &&
+          _boxHitsRect(bx0, by0, bx1, by1, left, top, right, bottom));
+
+  /// Whether every box lies inside the circle.
+  bool insideCircle(double x, double y, double radius) =>
+      _farRectDistSq(x, y, ax0, ay0, ax1, ay1) <= radius * radius &&
+      (boxCount != 2 ||
+          _farRectDistSq(x, y, bx0, by0, bx1, by1) <= radius * radius);
+
+  /// Distance from (x, y) to the nearest box.
+  double distanceTo(double x, double y) {
+    final a = _rectDistSq(x, y, ax0, ay0, ax1, ay1);
+    return sqrt(
+      boxCount == 2 ? min(a, _rectDistSq(x, y, bx0, by0, bx1, by1)) : a,
+    );
+  }
+
+  static bool _boxHitsRect(
+    double x0,
+    double y0,
+    double x1,
+    double y1,
+    double left,
+    double top,
+    double right,
+    double bottom,
+  ) => x0 <= right && x1 >= left && y0 <= bottom && y1 >= top;
 
   /// Computes the bounds; [depth] = e/2, [near] = k/4 + e/2, [reach] = k + e/2.
   void set(
@@ -246,6 +307,18 @@ class _MetaballRenderer {
 
   final ui.FragmentProgram program;
 
+  /// How many bubbles fully covering something hide it: after that many, at most
+  /// _kSdfOccludedKeep of it can show through.
+  static final int _coversToHide = () {
+    int covers = 0;
+    double keep = 1;
+    while (keep >= _kSdfOccludedKeep && covers < 64) {
+      keep *= 1 - _kSdfStacking;
+      covers++;
+    }
+    return covers;
+  }();
+
   // One shader instance per drawn tile, reused across frames, so uniforms of different tiles
   // never share an instance within a frame.
   final List<ui.FragmentShader> _shaders = [];
@@ -277,6 +350,9 @@ class _MetaballRenderer {
     (_) => <_SdfPair>[],
   );
 
+  // Floats of one spot group (4 spots as x, y, radius), see _emitTile.
+  final List<double> _spotGroup = List.filled(12, 0);
+
   // Stacking edge width (same as the shader's) and the neck distance limits (see _SdfPair).
   double _edge = 1;
   double _neckDepth = 0;
@@ -307,7 +383,7 @@ class _MetaballRenderer {
     _neckNear = _kSdfSmoothing / 4 + _edge / 2;
     _neckReach = _kSdfSmoothing + _edge / 2;
     _buildPairs(manager);
-    _binPairs(w, h, cols, rows);
+    _binPairs(cols, rows);
 
     for (int row = 0; row < rows; row++) {
       final top = row * _kSdfTileSize;
@@ -315,25 +391,21 @@ class _MetaballRenderer {
       for (int col = 0; col < cols; col++) {
         final left = col * _kSdfTileSize;
         final right = min(left + _kSdfTileSize, w);
-        manager.bubbleGrid.queryRect(
-          Rect.fromLTRB(
-            left - bubbleReach,
-            top - bubbleReach,
-            right + bubbleReach,
-            bottom + bubbleReach,
-          ),
+        manager.bubbleGrid.queryBounds(
+          left - bubbleReach,
+          top - bubbleReach,
+          right + bubbleReach,
+          bottom + bubbleReach,
           _rootBubbles,
         );
         if (_rootBubbles.isEmpty) continue;
         // Stacking needs bottom-to-top order; sub-tiles keep it while filtering.
         _rootBubbles.sort(_compareBubbleIndex);
-        manager.spotGrid.queryRect(
-          Rect.fromLTRB(
-            left - spotReach,
-            top - spotReach,
-            right + spotReach,
-            bottom + spotReach,
-          ),
+        manager.spotGrid.queryBounds(
+          left - spotReach,
+          top - spotReach,
+          right + spotReach,
+          bottom + spotReach,
           _rootSpots,
         );
         _drawTile(
@@ -366,16 +438,21 @@ class _MetaballRenderer {
     int lastLower = -1;
     for (int l = 0; l < bubbles.length; l++) {
       final lower = bubbles[l];
-      manager.bubbleGrid.query(
-        lower.position,
-        lower.radius + reach,
+      final lx = lower.position.dx;
+      final ly = lower.position.dy;
+      final queryRadius = lower.radius + reach;
+      manager.bubbleGrid.queryBounds(
+        lx - queryRadius,
+        ly - queryRadius,
+        lx + queryRadius,
+        ly + queryRadius,
         _nearBubbles,
       );
       for (int n = 0; n < _nearBubbles.length; n++) {
         final upper = _nearBubbles[n];
         if (upper.index <= lower.index) continue;
-        final dx = upper.position.dx - lower.position.dx;
-        final dy = upper.position.dy - lower.position.dy;
+        final dx = upper.position.dx - lx;
+        final dy = upper.position.dy - ly;
         final fuse = upper.radius + lower.radius + k;
         if (dx * dx + dy * dy >= fuse * fuse) continue;
 
@@ -400,48 +477,59 @@ class _MetaballRenderer {
     if (!ordered) _framePairs.sort(_comparePairOrder);
   }
 
-  /// Whether bubbles above the pair's lower bubble (candidates in [_nearBubbles]) fully cover
-  /// the neck's bounds so that at most _kSdfOccludedKeep of it could show through.
+  /// Radius of the circle inside [b] where it covers fully (its stacking edge is e/2 wide
+  /// inside), or <= 0.
+  double _coverRadius(_Bubble b) => b.radius - _edge / 2;
+
+  /// Whether enough bubbles above the pair's lower bubble (candidates in [_nearBubbles]) each
+  /// fully cover the neck's bounds to hide it (see _coversToHide).
   bool _isOccluded(_SdfPair q) {
-    final keepFactor = 1 - _kSdfStacking;
-    double keep = 1;
+    int covers = 0;
     for (int n = 0; n < _nearBubbles.length; n++) {
       final c = _nearBubbles[n];
       if (c.index <= q.lower.index) continue;
-      // Full stacking coverage needs depth >= e/2 inside.
-      final inner = c.radius - _edge / 2;
-      if (inner <= 0) continue;
-      final cx = c.position.dx;
-      final cy = c.position.dy;
-      if (!_boxInsideCircle(cx, cy, inner, q.ax0, q.ay0, q.ax1, q.ay1)) {
+      final inner = _coverRadius(c);
+      if (inner <= 0 || !q.insideCircle(c.position.dx, c.position.dy, inner)) {
         continue;
       }
-      if (q.boxCount == 2 &&
-          !_boxInsideCircle(cx, cy, inner, q.bx0, q.by0, q.bx1, q.by1)) {
-        continue;
-      }
-      keep *= keepFactor;
-      if (keep < _kSdfOccludedKeep) return true;
+      if (++covers >= _coversToHide) return true;
     }
     return false;
   }
 
-  static bool _boxInsideCircle(
-    double cx,
-    double cy,
-    double radius,
-    double x0,
-    double y0,
-    double x1,
-    double y1,
+  /// Index of the lowest of the bubbles that fully cover the rect from the top down until they
+  /// hide what's below them (see _coversToHide), or -1. [bubbles] are in layer order.
+  int _occlusionThreshold(
+    List<_Bubble> bubbles,
+    double left,
+    double top,
+    double right,
+    double bottom,
   ) {
-    final fx = max((cx - x0).abs(), (cx - x1).abs());
-    final fy = max((cy - y0).abs(), (cy - y1).abs());
-    return fx * fx + fy * fy <= radius * radius;
+    int covers = 0;
+    for (int k = bubbles.length - 1; k >= 0; k--) {
+      final b = bubbles[k];
+      final inner = _coverRadius(b);
+      if (inner <= 0 ||
+          _farRectDistSq(
+                b.position.dx,
+                b.position.dy,
+                left,
+                top,
+                right,
+                bottom,
+              ) >
+              inner * inner) {
+        continue;
+      }
+      if (++covers >= _coversToHide) return b.index;
+    }
+    return -1;
   }
 
-  /// Distributes [_framePairs] to the top-level tiles their necks can touch.
-  void _binPairs(double w, double h, int cols, int rows) {
+  /// Distributes [_framePairs] to the top-level tiles their bounds overlap; _drawTile then
+  /// filters them exactly.
+  void _binPairs(int cols, int rows) {
     final tileCount = cols * rows;
     while (_rootPairs.length < tileCount) {
       _rootPairs.add(<_SdfPair>[]);
@@ -453,26 +541,13 @@ class _MetaballRenderer {
 
     for (int n = 0; n < _framePairs.length; n++) {
       final q = _framePairs[n];
-      double x0 = q.ax0, y0 = q.ay0, x1 = q.ax1, y1 = q.ay1;
-      if (q.boxCount == 2) {
-        x0 = min(x0, q.bx0);
-        y0 = min(y0, q.by0);
-        x1 = max(x1, q.bx1);
-        y1 = max(y1, q.by1);
-      }
-      final c0 = (x0 / _kSdfTileSize).floor().clamp(0, cols - 1);
-      final c1 = (x1 / _kSdfTileSize).floor().clamp(0, cols - 1);
-      final r0 = (y0 / _kSdfTileSize).floor().clamp(0, rows - 1);
-      final r1 = (y1 / _kSdfTileSize).floor().clamp(0, rows - 1);
+      final c0 = (q.minX / _kSdfTileSize).floor().clamp(0, cols - 1);
+      final c1 = (q.maxX / _kSdfTileSize).floor().clamp(0, cols - 1);
+      final r0 = (q.minY / _kSdfTileSize).floor().clamp(0, rows - 1);
+      final r1 = (q.maxY / _kSdfTileSize).floor().clamp(0, rows - 1);
       for (int row = r0; row <= r1; row++) {
-        final top = row * _kSdfTileSize;
-        final bottom = min(top + _kSdfTileSize, h);
         for (int col = c0; col <= c1; col++) {
-          final left = col * _kSdfTileSize;
-          final right = min(left + _kSdfTileSize, w);
-          if (_pairHitsRect(q, left, top, right, bottom)) {
-            _rootPairs[row * cols + col].add(q);
-          }
+          _rootPairs[row * cols + col].add(q);
         }
       }
     }
@@ -486,22 +561,7 @@ class _MetaballRenderer {
     double top,
     double right,
     double bottom,
-  ) {
-    final dx = cx < left ? left - cx : (cx > right ? cx - right : 0.0);
-    final dy = cy < top ? top - cy : (cy > bottom ? cy - bottom : 0.0);
-    return dx * dx + dy * dy <= radius * radius;
-  }
-
-  static bool _boxHitsRect(
-    double x0,
-    double y0,
-    double x1,
-    double y1,
-    double left,
-    double top,
-    double right,
-    double bottom,
-  ) => x0 <= right && x1 >= left && y0 <= bottom && y1 >= top;
+  ) => _rectDistSq(cx, cy, left, top, right, bottom) <= radius * radius;
 
   // Scratch result of _distanceRange.
   double _rangeMin = 0;
@@ -517,12 +577,9 @@ class _MetaballRenderer {
   ) {
     final cx = b.position.dx;
     final cy = b.position.dy;
-    final nx = cx < left ? left - cx : (cx > right ? cx - right : 0.0);
-    final ny = cy < top ? top - cy : (cy > bottom ? cy - bottom : 0.0);
-    final fx = max((cx - left).abs(), (cx - right).abs());
-    final fy = max((cy - top).abs(), (cy - bottom).abs());
-    _rangeMin = sqrt(nx * nx + ny * ny) - b.radius;
-    _rangeMax = sqrt(fx * fx + fy * fy) - b.radius;
+    _rangeMin = sqrt(_rectDistSq(cx, cy, left, top, right, bottom)) - b.radius;
+    _rangeMax =
+        sqrt(_farRectDistSq(cx, cy, left, top, right, bottom)) - b.radius;
   }
 
   static double _gap(double a0, double a1, double b0, double b1) =>
@@ -537,20 +594,7 @@ class _MetaballRenderer {
     double right,
     double bottom,
   ) {
-    if (!_boxHitsRect(q.ax0, q.ay0, q.ax1, q.ay1, left, top, right, bottom) &&
-        !(q.boxCount == 2 &&
-            _boxHitsRect(
-              q.bx0,
-              q.by0,
-              q.bx1,
-              q.by1,
-              left,
-              top,
-              right,
-              bottom,
-            ))) {
-      return false;
-    }
+    if (!q.hitsRect(left, top, right, bottom)) return false;
     _distanceRange(q.lower, left, top, right, bottom);
     final l0 = max(_rangeMin, -_neckDepth);
     final l1 = min(_rangeMax, _neckReach);
@@ -565,39 +609,6 @@ class _MetaballRenderer {
     if (l0 <= lNear && _gap(l0, lNear, u0, u1) <= k) return true;
     final uNear = min(u1, _neckNear);
     return u0 <= uNear && _gap(l0, l1, u0, uNear) <= k;
-  }
-
-  /// Index of the lowest of the bubbles that fully cover the rect from the top down until at
-  /// most _kSdfOccludedKeep of what's below them can show through, or -1. [bubbles] are in
-  /// layer order.
-  int _occlusionThreshold(
-    List<_Bubble> bubbles,
-    double left,
-    double top,
-    double right,
-    double bottom,
-  ) {
-    final keepFactor = 1 - _kSdfStacking;
-    double keep = 1;
-    for (int k = bubbles.length - 1; k >= 0; k--) {
-      final b = bubbles[k];
-      final inner = b.radius - _edge / 2;
-      if (inner <= 0) continue;
-      if (!_boxInsideCircle(
-        b.position.dx,
-        b.position.dy,
-        inner,
-        left,
-        top,
-        right,
-        bottom,
-      )) {
-        continue;
-      }
-      keep *= keepFactor;
-      if (keep < _kSdfOccludedKeep) return b.index;
-    }
-    return -1;
   }
 
   void _drawTile(
@@ -802,11 +813,7 @@ class _MetaballRenderer {
     final cy = (top + bottom) / 2;
     for (int k = 0; k < pairs.length; k++) {
       final q = pairs[k];
-      double key = _boxDistance(cx, cy, q.ax0, q.ay0, q.ax1, q.ay1);
-      if (q.boxCount == 2) {
-        key = min(key, _boxDistance(cx, cy, q.bx0, q.by0, q.bx1, q.by1));
-      }
-      q.sortKey = key;
+      q.sortKey = q.distanceTo(cx, cy);
     }
     pairs.sort(_comparePairKeyAscending);
 
@@ -830,19 +837,6 @@ class _MetaballRenderer {
     }
     pairs.length = kept;
     pairs.sort(_comparePairOrder);
-  }
-
-  static double _boxDistance(
-    double x,
-    double y,
-    double x0,
-    double y0,
-    double x1,
-    double y1,
-  ) {
-    final dx = x < x0 ? x0 - x : (x > x1 ? x - x1 : 0.0);
-    final dy = y < y0 ? y0 - y : (y > y1 ? y - y1 : 0.0);
-    return sqrt(dx * dx + dy * dy);
   }
 
   /// Merges [bubbles] and [pairs] (both in layer order) into the bottom-to-top event list:
@@ -878,15 +872,7 @@ class _MetaballRenderer {
     }
     if (shader != null && events.isOdd) {
       // Padding: a neck with a far away, zero radius bubble adds nothing.
-      final base = _kSdfEventsBBase + events ~/ 2 * 4;
-      final colorBase = _kSdfEventsCBase + events ~/ 2 * 4 + 2;
-      shader
-        ..setFloat(base, -100000)
-        ..setFloat(base + 1, -100000)
-        ..setFloat(base + 2, 0)
-        ..setFloat(base + 3, 2)
-        ..setFloat(colorBase, 0)
-        ..setFloat(colorBase + 1, 0);
+      _writeEvent(shader, events, -100000, -100000, 0, 2, 0, 0);
     }
     return events;
   }
@@ -894,23 +880,43 @@ class _MetaballRenderer {
   /// Event [slot] (see the shader): [b] with [kind] encoded in w with its opacity.
   void _setEvent(ui.FragmentShader? shader, int slot, _Bubble b, int kind) {
     if (shader == null) return;
+    final o = max(0.0, b.opacity);
+    _writeEvent(
+      shader,
+      slot,
+      b.position.dx,
+      b.position.dy,
+      b.radius,
+      kind == _kSdfEventDraw
+          ? o
+          : (kind == _kSdfEventLowerOnly ? -1 - o : 2 + o),
+      _packRgb(b.color),
+      _packRgb(b.colorMask),
+    );
+  }
+
+  /// Writes the floats of event [slot]: events go in pairs (A, B) with their colors in C.
+  static void _writeEvent(
+    ui.FragmentShader shader,
+    int slot,
+    double x,
+    double y,
+    double radius,
+    double w,
+    double surface,
+    double mask,
+  ) {
     final pair = slot ~/ 2;
     final odd = slot.isOdd;
     final base = (odd ? _kSdfEventsBBase : _kSdfEventsABase) + pair * 4;
     final colorBase = _kSdfEventsCBase + pair * 4 + (odd ? 2 : 0);
-    final o = max(0.0, b.opacity);
     shader
-      ..setFloat(base, b.position.dx)
-      ..setFloat(base + 1, b.position.dy)
-      ..setFloat(base + 2, b.radius)
-      ..setFloat(
-        base + 3,
-        kind == _kSdfEventDraw
-            ? o
-            : (kind == _kSdfEventLowerOnly ? -1 - o : 2 + o),
-      )
-      ..setFloat(colorBase, _packRgb(b.color))
-      ..setFloat(colorBase + 1, _packRgb(b.colorMask));
+      ..setFloat(base, x)
+      ..setFloat(base + 1, y)
+      ..setFloat(base + 2, radius)
+      ..setFloat(base + 3, w)
+      ..setFloat(colorBase, surface)
+      ..setFloat(colorBase + 1, mask);
   }
 
   /// Sorts [spots] by the alpha each one is guaranteed to have everywhere in the tile
@@ -926,15 +932,19 @@ class _MetaballRenderer {
     for (int k = 0; k < spots.length; k++) {
       final s = spots[k];
       // Farthest tile point from the spot center.
-      final dx = max(
-        (s.position.dx - left).abs(),
-        (s.position.dx - right).abs(),
+      s.sortKey = _spotAlphaAt(
+        sqrt(
+          _farRectDistSq(
+            s.position.dx,
+            s.position.dy,
+            left,
+            top,
+            right,
+            bottom,
+          ),
+        ),
+        s.radius,
       );
-      final dy = max(
-        (s.position.dy - top).abs(),
-        (s.position.dy - bottom).abs(),
-      );
-      s.sortKey = _spotAlphaAt(sqrt(dx * dx + dy * dy), s.radius);
     }
     spots.sort(_compareSpotKeyDescending);
 
@@ -948,11 +958,14 @@ class _MetaballRenderer {
     }
   }
 
-  static double _packRgb(Color c) =>
-      (((c.r * 255).round() << 16) |
-              ((c.g * 255).round() << 8) |
-              (c.b * 255).round())
-          .toDouble();
+  static double _packRgb(Color c) => (c.toARGB32() & 0xFFFFFF).toDouble();
+
+  /// A new shader instance with the uniforms that never change already set.
+  ui.FragmentShader _newShader() => program.fragmentShader()
+    ..setFloat(0, _kSdfSmoothing)
+    ..setFloat(2, 1 / _kSdfColorFade)
+    ..setFloat(3, _kSdfDepthClamp)
+    ..setFloat(4, _kSdfStacking);
 
   void _emitTile(
     Canvas canvas,
@@ -966,7 +979,7 @@ class _MetaballRenderer {
   ) {
     final shaderIndex = _shaderIndex++;
     while (_shaders.length <= shaderIndex) {
-      _shaders.add(program.fragmentShader());
+      _shaders.add(_newShader());
     }
     final shader = _shaders[shaderIndex];
 
@@ -974,54 +987,45 @@ class _MetaballRenderer {
     final spotCount = tileSpots.length;
     final groupCount = (spotCount + 3) ~/ 4;
 
-    // Only normalizes the color weights; covers the necks' bubbles too.
-    double refRadius = 0;
-    for (int k = 0; k < tileBubbles.length; k++) {
-      refRadius = max(refRadius, tileBubbles[k].radius);
-    }
-    for (int k = 0; k < tilePairs.length; k++) {
-      refRadius = max(refRadius, tilePairs[k].lower.radius);
-      refRadius = max(refRadius, tilePairs[k].upper.radius);
-    }
-
     shader
-      ..setFloat(0, _kSdfSmoothing)
       ..setFloat(1, _pixelSize * _kSdfAaWidth)
-      ..setFloat(2, 1 / _kSdfColorFade)
-      ..setFloat(3, _kSdfDepthClamp)
-      ..setFloat(4, _kSdfSizeBias)
-      ..setFloat(5, refRadius)
+      ..setFloat(5, _edge)
       ..setFloat(6, ((eventCount + 1) ~/ 2).toDouble())
-      ..setFloat(7, groupCount.toDouble())
-      ..setFloat(_kSdfParams2Base, _kSdfStacking)
-      ..setFloat(_kSdfParams2Base + 1, _kSdfEdgeFade);
+      ..setFloat(7, groupCount.toDouble());
 
-    for (int k = 0; k < groupCount * 4; k++) {
-      final double x, y, r;
-      if (k < spotCount) {
-        final s = tileSpots[k];
-        x = s.position.dx;
-        y = s.position.dy;
-        r = s.radius;
-      } else {
-        // Padding: far away, so its alpha is 0.
-        x = -100000;
-        y = -100000;
-        r = 1;
+    // Spots 4g..4g+3 as 4 x (x, y, radius), spread over A, B, C of group g; padding spots are
+    // far away, so their alpha is 0.
+    final group = _spotGroup;
+    for (int g = 0; g < groupCount; g++) {
+      for (int j = 0; j < 4; j++) {
+        final k = g * 4 + j;
+        if (k < spotCount) {
+          final s = tileSpots[k];
+          group[j * 3] = s.position.dx;
+          group[j * 3 + 1] = s.position.dy;
+          group[j * 3 + 2] = s.radius;
+        } else {
+          group[j * 3] = -100000;
+          group[j * 3 + 1] = -100000;
+          group[j * 3 + 2] = 1;
+        }
       }
-      // Spot k of group g occupies floats 3k..3k+2 of the group's 12 floats in A, B, C.
-      final group = k ~/ 4;
-      final first = (k % 4) * 3;
-      for (int c = 0; c < 3; c++) {
-        final slot = first + c;
-        final arrayBase = slot < 4
-            ? _kSdfSpotsABase
-            : (slot < 8 ? _kSdfSpotsBBase : _kSdfSpotsCBase);
-        shader.setFloat(
-          arrayBase + group * 4 + slot % 4,
-          c == 0 ? x : (c == 1 ? y : r),
-        );
-      }
+      final a = _kSdfSpotsABase + g * 4;
+      final b = _kSdfSpotsBBase + g * 4;
+      final c = _kSdfSpotsCBase + g * 4;
+      shader
+        ..setFloat(a, group[0])
+        ..setFloat(a + 1, group[1])
+        ..setFloat(a + 2, group[2])
+        ..setFloat(a + 3, group[3])
+        ..setFloat(b, group[4])
+        ..setFloat(b + 1, group[5])
+        ..setFloat(b + 2, group[6])
+        ..setFloat(b + 3, group[7])
+        ..setFloat(c, group[8])
+        ..setFloat(c + 1, group[9])
+        ..setFloat(c + 2, group[10])
+        ..setFloat(c + 3, group[11]);
     }
 
     _paint.shader = shader;
