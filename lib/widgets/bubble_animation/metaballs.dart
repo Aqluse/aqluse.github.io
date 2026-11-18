@@ -34,6 +34,44 @@ double _sdfEdgeFade = _sdfEnv(
   minValue: 0.01,
 );
 
+// Mask spot look (initial values; adjustable at runtime with the overlay sliders). Defaults give
+// the original profile: solid core 0.05 of the radius, then linear fade to the edge.
+
+/// PERF_SPOT_SIZE: spot radius multiplier.
+double _sdfSpotSize = _sdfEnv(
+  const String.fromEnvironment('PERF_SPOT_SIZE'),
+  1,
+  minValue: 0.01,
+);
+
+/// PERF_SPOT_STRENGTH: spot opacity multiplier (the result is clamped to 1).
+double _sdfSpotStrength = _sdfEnv(
+  const String.fromEnvironment('PERF_SPOT_STRENGTH'),
+  1,
+);
+
+/// PERF_SPOT_CORE: fraction of the radius with solid color.
+double _sdfSpotCore = _sdfEnv(
+  const String.fromEnvironment('PERF_SPOT_CORE'),
+  0.05,
+);
+
+/// PERF_SPOT_FALLOFF: exponent of the fade from the core to the edge; 1 = linear,
+/// > 1 = more concentrated, < 1 = flatter.
+double _sdfSpotFalloff = _sdfEnv(
+  const String.fromEnvironment('PERF_SPOT_FALLOFF'),
+  1,
+  minValue: 0.01,
+);
+
+/// Spot alpha (before mask opacity) at [distance] from the center of a spot with [radius];
+/// must match spotKeep() in shaders/metaballs.frag.
+double _spotAlphaAt(double distance, double radius) {
+  final t = ((distance / radius - _sdfSpotCore) / max(1 - _sdfSpotCore, 0.001))
+      .clamp(0.0, 1.0);
+  return min(1, _sdfSpotStrength * pow(1 - t, _sdfSpotFalloff));
+}
+
 /// PERF_SDF_DEPTH: how deep inside a bubble (logical px) its weight keeps growing. Small values
 /// make every bubble covering a pixel weigh the same, so overlaps are decided by
 /// PERF_SDF_SIZE_BIAS instead of by depth.
@@ -139,7 +177,7 @@ class _MetaballRenderer {
     final w = size.width;
     final h = size.height;
     final bubbleReach = manager.maxBubbleRadius + _kSdfSmoothing;
-    final spotReach = manager.maxSpotRadius;
+    final spotReach = manager.maxSpotRadius * _sdfSpotSize;
 
     for (double top = 0; top < h; top += _kSdfTileSize) {
       final bottom = min(top + _kSdfTileSize, h);
@@ -232,7 +270,7 @@ class _MetaballRenderer {
       if (_circleHitsRect(
         s.position.dx,
         s.position.dy,
-        s.radius,
+        s.radius * _sdfSpotSize,
         left,
         top,
         right,
@@ -334,11 +372,10 @@ class _MetaballRenderer {
         (s.position.dy - top).abs(),
         (s.position.dy - bottom).abs(),
       );
-      final t = ((sqrt(dx * dx + dy * dy) / s.radius - 0.05) / 0.95).clamp(
-        0.0,
-        1.0,
+      s.sortKey = _spotAlphaAt(
+        sqrt(dx * dx + dy * dy),
+        s.radius * _sdfSpotSize,
       );
-      s.sortKey = 1 - t;
     }
     spots.sort(_compareSpotKeyDescending);
 
@@ -394,7 +431,10 @@ class _MetaballRenderer {
       ..setFloat(6, pairCount.toDouble())
       ..setFloat(7, groupCount.toDouble())
       ..setFloat(_kSdfParams2Base, _kSdfStacking ? 1 : 0)
-      ..setFloat(_kSdfParams2Base + 1, _sdfEdgeFade);
+      ..setFloat(_kSdfParams2Base + 1, _sdfEdgeFade)
+      ..setFloat(_kSdfParams2Base + 2, _sdfSpotStrength)
+      ..setFloat(_kSdfParams2Base + 3, _sdfSpotCore)
+      ..setFloat(_kSdfParams2Base + 4, _sdfSpotFalloff);
 
     for (int k = 0; k < pairCount * 2; k++) {
       final pair = k ~/ 2;
@@ -428,7 +468,7 @@ class _MetaballRenderer {
         final s = tileSpots[k];
         x = s.position.dx;
         y = s.position.dy;
-        r = s.radius;
+        r = s.radius * _sdfSpotSize;
       } else {
         // Padding: far away, so its alpha is 0.
         x = -100000;

@@ -192,17 +192,59 @@ class _PerfOverlayState extends State<_PerfOverlay>
               ),
             ),
             if (_kUseSdf) ...[
-              _buildFadeSlider(
+              _buildSlider(
                 textStyle,
-                label: 'edge fade',
+                label: 'edge fade px',
                 value: _sdfEdgeFade,
+                min: 0.25,
+                max: 6,
+                step: 0.05,
                 onChanged: (value) => _sdfEdgeFade = value,
               ),
-              _buildFadeSlider(
+              _buildSlider(
                 textStyle,
-                label: 'neck fade',
+                label: 'neck fade px',
                 value: _sdfColorFade,
+                min: 0.25,
+                max: 6,
+                step: 0.05,
                 onChanged: (value) => _sdfColorFade = value,
+              ),
+              _buildSlider(
+                textStyle,
+                label: 'spot size',
+                value: _sdfSpotSize,
+                min: 0.25,
+                max: 2,
+                step: 0.05,
+                onChanged: (value) => _sdfSpotSize = value,
+              ),
+              _buildSlider(
+                textStyle,
+                label: 'spot strength',
+                value: _sdfSpotStrength,
+                min: 0,
+                max: 2,
+                step: 0.05,
+                onChanged: (value) => _sdfSpotStrength = value,
+              ),
+              _buildSlider(
+                textStyle,
+                label: 'spot core',
+                value: _sdfSpotCore,
+                min: 0,
+                max: 0.9,
+                step: 0.01,
+                onChanged: (value) => _sdfSpotCore = value,
+              ),
+              _buildSlider(
+                textStyle,
+                label: 'spot falloff',
+                value: _sdfSpotFalloff,
+                min: 0.25,
+                max: 4,
+                step: 0.05,
+                onChanged: (value) => _sdfSpotFalloff = value,
               ),
             ],
           ],
@@ -211,37 +253,34 @@ class _PerfOverlayState extends State<_PerfOverlay>
     );
   }
 
-  /// Runtime tuning of an SDF fade width (PERF_SDF_EDGE_FADE / PERF_SDF_FADE).
-  Widget _buildFadeSlider(
+  /// Runtime tuning of a look parameter (PERF: values are read by the shader every frame).
+  Widget _buildSlider(
     TextStyle textStyle, {
     required String label,
     required double value,
+    required double min,
+    required double max,
+    required double step,
     required ValueChanged<double> onChanged,
   }) {
     return Row(
       mainAxisSize: .min,
       children: [
         SizedBox(
-          width: 140,
-          child: Text(
-            '$label ${value.toStringAsFixed(2)} px',
-            style: textStyle,
-          ),
+          width: 170,
+          child: Text('$label ${value.toStringAsFixed(2)}', style: textStyle),
         ),
         SizedBox(
           width: 320,
           child: Slider(
-            value: value.clamp(_kFadeMin, _kFadeMax),
-            min: _kFadeMin,
-            max: _kFadeMax,
-            divisions: ((_kFadeMax - _kFadeMin) / 0.05).round(),
+            value: value.clamp(min, max),
+            min: min,
+            max: max,
+            divisions: ((max - min) / step).round(),
             onChanged: (v) => setState(() => onChanged(v)),
           ),
         ),
       ],
     );
   }
-
-  static const double _kFadeMin = 0.25;
-  static const double _kFadeMax = 6;
 }

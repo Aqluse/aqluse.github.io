@@ -21,7 +21,8 @@ uniform vec4 uColors[kMaxBubblePairs];  // 264-391: packed rgb: surface 2i, mask
 uniform vec4 uSpotsA[kMaxSpotGroups];   // 392-519: spots 4i..4i+3 as 4 x (x, y, radius),
 uniform vec4 uSpotsB[kMaxSpotGroups];   // 520-647: spread over A, B, C
 uniform vec4 uSpotsC[kMaxSpotGroups];   // 648-775
-uniform vec4 uParams2;                  // 776-779: stacking (0 or 1), edge fade (logical px), unused, unused
+uniform vec4 uParams2;                  // 776-779: stacking (0 or 1), edge fade (logical px), spot strength, spot core
+uniform vec4 uParams3;                  // 780-783: spot falloff exponent, unused, unused, unused
 
 out vec4 fragColor;
 
@@ -60,11 +61,14 @@ float glowAlpha(vec2 p, vec4 b) {
   return 0.3 * b.w * (1.0 - t);
 }
 
-// Mask spot: radial gradient [maskColor, transparent] with stops [0.05, 1.0], clamped.
-// Returns the remaining transparency factor for mask opacity o.
+// Mask spot: radial gradient [maskColor, transparent], solid up to the core fraction of the
+// radius, then fading as (1 - t)^falloff, scaled by strength (original: core 0.05, falloff 1,
+// strength 1). Returns the remaining transparency factor for mask opacity o.
+// Must match the culling estimate in metaballs.dart (_spotAlphaAt).
 float spotKeep(vec2 p, vec3 s, float o) {
-  float t = clamp((distance(p, s.xy) / s.z - 0.05) / 0.95, 0.0, 1.0);
-  return 1.0 - o * (1.0 - t);
+  float core = uParams2.w;
+  float t = clamp((distance(p, s.xy) / s.z - core) / max(1.0 - core, 0.001), 0.0, 1.0);
+  return 1.0 - clamp(o * uParams2.z * pow(1.0 - t, uParams3.x), 0.0, 1.0);
 }
 
 void main() {
