@@ -98,14 +98,19 @@ final double _kSdfAaWidth = _sdfEnv(
 /// PERF_SDF_STACKING: `on` (default) = inside bubbles only the top bubble (the old renderer's
 /// order: later in the sorted list = on top) gives surface, mask and glow, with a soft
 /// transition over max(fade, AA width) across its edge; necks outside all bubbles still use the
-/// weighted blend. `off` = weighted blend everywhere (lower bubbles show through).
-const bool _kSdfStacking =
-    String.fromEnvironment('PERF_SDF_STACKING', defaultValue: 'on') != 'off';
+/// weighted blend. `off` = weighted blend everywhere (lower bubbles show through). The value is
+/// the stacking strength from 0 (off) to 1 (on), adjustable at runtime with the overlay slider;
+/// values in between let lower bubbles partially show through.
+double _sdfStacking =
+    const String.fromEnvironment('PERF_SDF_STACKING', defaultValue: 'on') ==
+        'off'
+    ? 0
+    : 1;
 
 String _sdfTunablesLine() =>
     'k $_sdfSmoothing · neck fade ${_sdfColorFade.toStringAsFixed(2)} · edge fade ${_sdfEdgeFade.toStringAsFixed(2)} · '
     'depth $_kSdfDepthClamp · sizeBias $_kSdfSizeBias · aa $_kSdfAaWidth · '
-    'stacking ${_kSdfStacking ? 'on' : 'off'}';
+    'stacking ${_sdfStacking.toStringAsFixed(2)}';
 
 /// Top-level tile size (logical px).
 const double _kSdfTileSize = 256;
@@ -195,7 +200,7 @@ class _MetaballRenderer {
         );
         if (_rootBubbles.isEmpty) continue;
         // Stacking needs bottom-to-top order; sub-tiles keep it while filtering.
-        if (_kSdfStacking) _rootBubbles.sort(_compareBubbleIndex);
+        if (_sdfStacking > 0) _rootBubbles.sort(_compareBubbleIndex);
         manager.spotGrid.queryRect(
           Rect.fromLTRB(
             left - spotReach,
@@ -332,7 +337,7 @@ class _MetaballRenderer {
         tileBubbles.sort(_compareBubbleKeyAscending);
         _manager.statSdfDropped += tileBubbles.length - _kSdfMaxBubbles;
         tileBubbles.length = _kSdfMaxBubbles;
-        if (_kSdfStacking) tileBubbles.sort(_compareBubbleIndex);
+        if (_sdfStacking > 0) tileBubbles.sort(_compareBubbleIndex);
       }
       if (tileSpots.length > _kSdfMaxSpots) {
         _manager.statSdfDropped += tileSpots.length - _kSdfMaxSpots;
@@ -431,7 +436,7 @@ class _MetaballRenderer {
       ..setFloat(5, refRadius)
       ..setFloat(6, pairCount.toDouble())
       ..setFloat(7, groupCount.toDouble())
-      ..setFloat(_kSdfParams2Base, _kSdfStacking ? 1 : 0)
+      ..setFloat(_kSdfParams2Base, _sdfStacking)
       ..setFloat(_kSdfParams2Base + 1, _sdfEdgeFade)
       ..setFloat(_kSdfParams2Base + 2, _sdfSpotStrength)
       ..setFloat(_kSdfParams2Base + 3, _sdfSpotCore)
