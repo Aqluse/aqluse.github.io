@@ -4,6 +4,8 @@ part of 'liquid_bubbles.dart';
 
 const bool _kPerfOverlay = true;
 
+const bool _kPerfTuningSliders = bool.fromEnvironment('PERF_TUNING_SLIDERS');
+
 enum _PerfPhase { warmUp, measuring, done }
 
 class _PerfOverlay extends StatefulWidget {
@@ -191,8 +193,9 @@ class _PerfOverlayState extends State<_PerfOverlay>
                 style: textStyle,
               ),
             ),
-            // Only the slider currently being tuned; the others were removed to save space.
-            if (_kUseSdf)
+            // Look tuning slider: only with --dart-define=PERF_TUNING_SLIDERS=true, so it never
+            // affects FPS measurements.
+            if (_kUseSdf && _kPerfTuningSliders)
               _buildSlider(
                 textStyle,
                 label: 'stacking',
