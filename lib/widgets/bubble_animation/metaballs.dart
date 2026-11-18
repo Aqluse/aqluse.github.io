@@ -22,7 +22,7 @@ final double _kSdfSmoothing = _sdfEnv(
 /// exp(-distance / fade).
 double _sdfColorFade = _sdfEnv(
   const String.fromEnvironment('PERF_SDF_FADE'),
-  24 / 5,
+  5, // tuned by eye with the overlay slider
   minValue: 0.01,
 );
 
@@ -30,7 +30,7 @@ double _sdfColorFade = _sdfEnv(
 /// stacking mode (initial value; adjustable at runtime with the overlay slider).
 double _sdfEdgeFade = _sdfEnv(
   const String.fromEnvironment('PERF_SDF_EDGE_FADE'),
-  1,
+  2.75, // tuned by eye with the overlay slider
   minValue: 0.01,
 );
 
