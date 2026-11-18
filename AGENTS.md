@@ -66,3 +66,15 @@ to https://aqluse.github.io via GitHub Pages.
 - Local preview: `fvm flutter run -d chrome`
 - No tests yet: `test/widget_test.dart` is the Flutter template and doesn't test the app. Once real
   tests are written, run `fvm flutter test`.
+
+## Performance measurements
+
+- Measure `--profile` builds. `fvm flutter run -d chrome` uses CanvasKit (dart2js); `--wasm` uses
+  skwasm. GitHub Pages can't send COOP/COEP headers, so skwasm runs single-threaded there; measure
+  skwasm from a static build served without those headers, not from `flutter run` (multi-threaded).
+- Keep the measured Chrome window focused: Chrome throttles unfocused or occluded windows, and the
+  `--disable-*-throttling` / `--disable-backgrounding-occluded-windows` flags don't prevent it.
+- `flutter run --web-browser-flag` splits values on commas (`--window-size=1,2` breaks); start
+  Chrome yourself (`-d web-server`) when a flag needs commas.
+- FPS is capped by the display refresh rate; compare variants below the cap (e.g. raise the bubble
+  count), and report the display used.
