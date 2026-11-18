@@ -24,6 +24,10 @@ const int _kPixelsPerOneBubble = int.fromEnvironment(
   defaultValue: 30_000,
 ); //75_000; //30_000; //100_000;
 
+/// Area per mask spot: 2 spots per 30 000 px² (the original 2 spots per bubble at the default
+/// density), independent of [_kPixelsPerOneBubble].
+const int _kPixelsPerMaskPoint = 15_000;
+
 void main() => runApp(const MaterialApp(home: LiquidBubbles(child: null)));
 
 class LiquidBubbles extends StatefulWidget {

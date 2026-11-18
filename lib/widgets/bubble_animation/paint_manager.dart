@@ -1,9 +1,5 @@
 part of 'liquid_bubbles.dart';
 
-/// PERF: spots per bubble (the original is 2); overridable to test spot density separately.
-final double _kSpotsPerBubble =
-    double.tryParse(const String.fromEnvironment('PERF_SPOTS_PER_BUBBLE')) ?? 2;
-
 class _PaintManager extends ChangeNotifier {
   _PaintManager();
 
@@ -126,8 +122,9 @@ class _PaintManager extends ChangeNotifier {
         return true;
       }
 
-      // PERF: --dart-define=PERF_SPOTS_PER_BUBBLE=x overrides the 2 spots per bubble.
-      final maskPointCount = (bubbleCount * _kSpotsPerBubble).round();
+      // Spots depend on the area only, not on the bubble density: denser spots saturate the mask
+      // and the bubbles turn into flat mask color.
+      final maskPointCount = (addedArea / _kPixelsPerMaskPoint).round();
 
       if (maskPointCount > 0) {
         if (sizeOld == Size.zero) {
