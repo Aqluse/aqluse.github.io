@@ -6,7 +6,7 @@ precision highp float;
 
 // Capacities: 2 * kMaxBubblePairs bubbles and 4 * kMaxSpotGroups spots per draw.
 // Must match _kSdfMaxBubbles / _kSdfMaxSpots in metaballs.dart.
-// Uniform budget: 2 + 32 * 3 + 32 * 3 = 194 vec4.
+// Uniform budget: 3 + 32 * 3 + 32 * 3 = 195 vec4.
 const int kMaxBubblePairs = 32;
 const int kMaxSpotGroups = 32;
 
@@ -21,6 +21,7 @@ uniform vec4 uColors[kMaxBubblePairs];  // 264-391: packed rgb: surface 2i, mask
 uniform vec4 uSpotsA[kMaxSpotGroups];   // 392-519: spots 4i..4i+3 as 4 x (x, y, radius),
 uniform vec4 uSpotsB[kMaxSpotGroups];   // 520-647: spread over A, B, C
 uniform vec4 uSpotsC[kMaxSpotGroups];   // 648-775
+uniform vec4 uParams2;                  // 776-779: stacking (0 or 1), unused, unused, unused
 
 out vec4 fragColor;
 
@@ -77,6 +78,17 @@ void main() {
   vec4 mask = vec4(0.0);    // premultiplied
   float glow = 0.0;         // white, premultiplied alpha
 
+  // Stacking: bubbles arrive bottom to top (list order), so lerping towards each bubble's
+  // values by its own edge coverage leaves the top covering bubble's values inside bubbles,
+  // with a soft transition across its edge. stackKeep = how much of the pixel is outside every
+  // bubble (there the weighted blend is used, as for the necks).
+  float stacking = uParams2.x;
+  float edge = max(1.0 / uParams0.z, uParams0.y);
+  vec4 stackSurface = vec4(0.0);
+  vec4 stackMask = vec4(0.0);
+  float stackGlow = 0.0;
+  float stackKeep = 1.0;
+
   int pairs = int(uParams1.z);
   for (int i = 0; i < kMaxBubblePairs; i++) {
     if (i >= pairs) break;
@@ -86,19 +98,35 @@ void main() {
     float di = distance(p, b.xy) - b.z;
     d = smin(d, di, k);
     float w = weight(di, b.z);
+    vec4 bs = vec4(unpackRgb(colors.x) * b.w, b.w);
+    vec4 bm = vec4(unpackRgb(colors.y) * b.w, b.w);
+    float bg = glowAlpha(p, b);
     wSum += w;
-    surface += w * vec4(unpackRgb(colors.x) * b.w, b.w);
-    mask += w * vec4(unpackRgb(colors.y) * b.w, b.w);
-    glow += w * glowAlpha(p, b);
+    surface += w * bs;
+    mask += w * bm;
+    glow += w * bg;
+    float ci = stacking * clamp(0.5 - di / edge, 0.0, 1.0);
+    stackSurface = mix(stackSurface, bs, ci);
+    stackMask = mix(stackMask, bm, ci);
+    stackGlow = mix(stackGlow, bg, ci);
+    stackKeep *= 1.0 - ci;
 
     b = uBubblesB[i];
     di = distance(p, b.xy) - b.z;
     d = smin(d, di, k);
     w = weight(di, b.z);
+    bs = vec4(unpackRgb(colors.z) * b.w, b.w);
+    bm = vec4(unpackRgb(colors.w) * b.w, b.w);
+    bg = glowAlpha(p, b);
     wSum += w;
-    surface += w * vec4(unpackRgb(colors.z) * b.w, b.w);
-    mask += w * vec4(unpackRgb(colors.w) * b.w, b.w);
-    glow += w * glowAlpha(p, b);
+    surface += w * bs;
+    mask += w * bm;
+    glow += w * bg;
+    ci = stacking * clamp(0.5 - di / edge, 0.0, 1.0);
+    stackSurface = mix(stackSurface, bs, ci);
+    stackMask = mix(stackMask, bm, ci);
+    stackGlow = mix(stackGlow, bg, ci);
+    stackKeep *= 1.0 - ci;
   }
 
   // Anti-aliased coverage over the AA width.
@@ -110,6 +138,16 @@ void main() {
     surface *= invW;
     mask *= invW;
     glow *= invW;
+
+    // Inside bubbles: the stacked (top bubble) values; the stack sums started from 0 and
+    // carry total weight `inside`, hence the normalization.
+    float inside = 1.0 - stackKeep;
+    if (inside > 0.0) {
+      float invInside = 1.0 / inside;
+      surface = mix(surface, stackSurface * invInside, inside);
+      mask = mix(mask, stackMask * invInside, inside);
+      glow = mix(glow, stackGlow * invInside, inside);
+    }
 
     // Spots share one color here, so stacking them is order-independent: 1 - prod(1 - a).
     float o = mask.a;
