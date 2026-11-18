@@ -191,27 +191,51 @@ class _PerfOverlayState extends State<_PerfOverlay>
                 style: textStyle,
               ),
             ),
-            if (_kUseSdf) _buildFadeSlider(textStyle),
+            if (_kUseSdf) ...[
+              _buildFadeSlider(
+                textStyle,
+                label: 'edge fade',
+                value: _sdfEdgeFade,
+                onChanged: (value) => _sdfEdgeFade = value,
+              ),
+              _buildFadeSlider(
+                textStyle,
+                label: 'neck fade',
+                value: _sdfColorFade,
+                onChanged: (value) => _sdfColorFade = value,
+              ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  /// Runtime tuning of the SDF color cross-fade width (PERF_SDF_FADE).
-  Widget _buildFadeSlider(TextStyle textStyle) {
+  /// Runtime tuning of an SDF fade width (PERF_SDF_EDGE_FADE / PERF_SDF_FADE).
+  Widget _buildFadeSlider(
+    TextStyle textStyle, {
+    required String label,
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
     return Row(
       mainAxisSize: .min,
       children: [
-        Text('fade ${_sdfColorFade.toStringAsFixed(2)} px', style: textStyle),
+        SizedBox(
+          width: 140,
+          child: Text(
+            '$label ${value.toStringAsFixed(2)} px',
+            style: textStyle,
+          ),
+        ),
         SizedBox(
           width: 320,
           child: Slider(
-            value: _sdfColorFade.clamp(_kFadeMin, _kFadeMax),
+            value: value.clamp(_kFadeMin, _kFadeMax),
             min: _kFadeMin,
             max: _kFadeMax,
             divisions: ((_kFadeMax - _kFadeMin) / 0.05).round(),
-            onChanged: (value) => setState(() => _sdfColorFade = value),
+            onChanged: (v) => setState(() => onChanged(v)),
           ),
         ),
       ],

@@ -21,7 +21,7 @@ uniform vec4 uColors[kMaxBubblePairs];  // 264-391: packed rgb: surface 2i, mask
 uniform vec4 uSpotsA[kMaxSpotGroups];   // 392-519: spots 4i..4i+3 as 4 x (x, y, radius),
 uniform vec4 uSpotsB[kMaxSpotGroups];   // 520-647: spread over A, B, C
 uniform vec4 uSpotsC[kMaxSpotGroups];   // 648-775
-uniform vec4 uParams2;                  // 776-779: stacking (0 or 1), unused, unused, unused
+uniform vec4 uParams2;                  // 776-779: stacking (0 or 1), edge fade (logical px), unused, unused
 
 out vec4 fragColor;
 
@@ -83,7 +83,8 @@ void main() {
   // with a soft transition across its edge. stackKeep = how much of the pixel is outside every
   // bubble (there the weighted blend is used, as for the necks).
   float stacking = uParams2.x;
-  float edge = max(1.0 / uParams0.z, uParams0.y);
+  // Transition width across the top bubble's edge, separate from the neck color fade.
+  float edge = max(uParams2.y, uParams0.y);
   vec4 stackSurface = vec4(0.0);
   vec4 stackMask = vec4(0.0);
   float stackGlow = 0.0;

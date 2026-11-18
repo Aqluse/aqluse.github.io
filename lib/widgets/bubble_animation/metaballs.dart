@@ -17,12 +17,20 @@ final double _kSdfSmoothing = _sdfEnv(
   minValue: 0.01,
 );
 
-/// PERF_SDF_FADE: width (logical px) of the color cross-fade between bubbles (initial value;
-/// adjustable at runtime with the overlay slider): weights are
+/// PERF_SDF_FADE: width (logical px) of the color cross-fade between fusing bubbles (necks;
+/// initial value, adjustable at runtime with the overlay slider): weights are
 /// exp(-distance / fade).
 double _sdfColorFade = _sdfEnv(
   const String.fromEnvironment('PERF_SDF_FADE'),
   24 / 5,
+  minValue: 0.01,
+);
+
+/// PERF_SDF_EDGE_FADE: width (logical px) of the transition across the top bubble's edge in
+/// stacking mode (initial value; adjustable at runtime with the overlay slider).
+double _sdfEdgeFade = _sdfEnv(
+  const String.fromEnvironment('PERF_SDF_EDGE_FADE'),
+  1,
   minValue: 0.01,
 );
 
@@ -56,7 +64,7 @@ const bool _kSdfStacking =
     String.fromEnvironment('PERF_SDF_STACKING', defaultValue: 'on') != 'off';
 
 String _sdfTunablesLine() =>
-    'k $_kSdfSmoothing · fade ${_sdfColorFade.toStringAsFixed(2)} · '
+    'k $_kSdfSmoothing · neck fade ${_sdfColorFade.toStringAsFixed(2)} · edge fade ${_sdfEdgeFade.toStringAsFixed(2)} · '
     'depth $_kSdfDepthClamp · sizeBias $_kSdfSizeBias · aa $_kSdfAaWidth · '
     'stacking ${_kSdfStacking ? 'on' : 'off'}';
 
@@ -385,7 +393,8 @@ class _MetaballRenderer {
       ..setFloat(5, refRadius)
       ..setFloat(6, pairCount.toDouble())
       ..setFloat(7, groupCount.toDouble())
-      ..setFloat(_kSdfParams2Base, _kSdfStacking ? 1 : 0);
+      ..setFloat(_kSdfParams2Base, _kSdfStacking ? 1 : 0)
+      ..setFloat(_kSdfParams2Base + 1, _sdfEdgeFade);
 
     for (int k = 0; k < pairCount * 2; k++) {
       final pair = k ~/ 2;
