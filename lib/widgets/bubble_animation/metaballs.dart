@@ -120,8 +120,9 @@ const int _kSdfMaxSplitDepth = 4;
 
 /// Capacities; must match kMaxEvents / kMaxSpotGroups * 4 in shaders/metaballs.frag.
 ///
-/// An event is a bubble, a neck, or a neck followed by its upper bubble (see the shader), so a
-/// tile needs one event per bubble without necks to lower bubbles plus one per neck.
+/// An event is a bubble, a neck, or a bubble followed by its neck to a higher bubble (see the
+/// shader), so a tile needs one event per bubble without necks to higher bubbles plus one per
+/// neck.
 const int _kSdfMaxEvents = 40;
 const int _kSdfMaxSpots = 128;
 
@@ -139,7 +140,7 @@ const int _kSdfParams2Base = _kSdfSpotsCBase + _kSdfMaxSpots ~/ 4 * 4;
 const double _kSdfSaturatedKeep = 1 / 512;
 
 /// Two fusing bubbles (center distance < r1 + r2 + k): the area their smooth union adds to the
-/// two shapes (the neck) is drawn at the upper bubble's layer. Reused across frames.
+/// two shapes (the neck) is drawn at the lower bubble's layer. Reused across frames.
 class _SdfPair {
   late _Bubble lower;
   late _Bubble upper;
@@ -194,9 +195,9 @@ class _SdfPair {
 /// Draws all bubbles as one smooth union per screen tile: one draw call per non-empty tile.
 ///
 /// Layered necks: the shader stacks bubbles bottom to top, and the neck of each fusing pair is
-/// stacked right under the pair's upper bubble, so it stays visible over every bubble below
-/// both and is hidden only by higher bubbles (and their necks). Per tile the bubbles and pairs
-/// are merged into one bottom-to-top event list (see shaders/metaballs.frag).
+/// stacked right above the pair's lower bubble, so it stays visible over every bubble below
+/// both, while bubbles above the lower one (including the upper one) cover it. Per tile the
+/// bubbles and pairs are merged into one bottom-to-top event list (see shaders/metaballs.frag).
 class _MetaballRenderer {
   _MetaballRenderer(this.program);
 
@@ -223,7 +224,7 @@ class _MetaballRenderer {
     (_) => <_MaskPoint>[],
   );
 
-  // Fusing pairs of the frame ordered by the upper bubble's index (objects from the pool),
+  // Fusing pairs of the frame ordered by the lower bubble's index (objects from the pool),
   // binned per top-level tile, then one list per split depth (all reused).
   final List<_SdfPair> _pairPool = [];
   final List<_SdfPair> _framePairs = [];
@@ -324,7 +325,7 @@ class _MetaballRenderer {
   }
 
   /// Collects every fusing pair (center distance < r1 + r2 + k) into [_framePairs], ordered by
-  /// the upper bubble's index.
+  /// the lower bubble's index.
   void _buildPairs(_PaintManager manager) {
     _framePairs.clear();
     // Without stacking every color is the weighted blend, which already includes the necks.
@@ -335,17 +336,17 @@ class _MetaballRenderer {
     final reach = manager.maxBubbleRadius + k;
     int used = 0;
     bool ordered = true;
-    int lastUpper = -1;
-    for (int u = 0; u < bubbles.length; u++) {
-      final upper = bubbles[u];
+    int lastLower = -1;
+    for (int l = 0; l < bubbles.length; l++) {
+      final lower = bubbles[l];
       manager.bubbleGrid.query(
-        upper.position,
-        upper.radius + reach,
+        lower.position,
+        lower.radius + reach,
         _nearBubbles,
       );
       for (int n = 0; n < _nearBubbles.length; n++) {
-        final lower = _nearBubbles[n];
-        if (lower.index >= upper.index) continue;
+        final upper = _nearBubbles[n];
+        if (upper.index <= lower.index) continue;
         final dx = upper.position.dx - lower.position.dx;
         final dy = upper.position.dy - lower.position.dy;
         final fuse = upper.radius + lower.radius + k;
@@ -355,8 +356,8 @@ class _MetaballRenderer {
         final pair = _pairPool[used++]
           ..set(lower, upper, _framePairs.length, _neckOuter);
         _framePairs.add(pair);
-        if (upper.index < lastUpper) ordered = false;
-        lastUpper = upper.index;
+        if (lower.index < lastLower) ordered = false;
+        lastLower = lower.index;
       }
     }
     // Bubble indexes normally equal list positions, so this is a fallback only.
@@ -622,10 +623,10 @@ class _MetaballRenderer {
   static int _comparePairKeyAscending(_SdfPair a, _SdfPair b) =>
       a.sortKey.compareTo(b.sortKey);
 
-  /// Layer order of the necks: by the upper bubble, then by creation.
+  /// Layer order of the necks: by the lower bubble, then by creation.
   static int _comparePairOrder(_SdfPair a, _SdfPair b) {
-    final byUpper = a.upper.index.compareTo(b.upper.index);
-    return byUpper != 0 ? byUpper : a.order.compareTo(b.order);
+    final byLower = a.lower.index.compareTo(b.lower.index);
+    return byLower != 0 ? byLower : a.order.compareTo(b.order);
   }
 
   /// Keeps the necks nearest to the tile center that fit into the event capacity next to
@@ -658,10 +659,10 @@ class _MetaballRenderer {
     int kept = 0;
     for (int k = 0; k < pairs.length; k++) {
       final q = pairs[k];
-      final free = q.upper.sdfMark == inTile;
+      final free = q.lower.sdfMark == inTile;
       if (!free && events >= _kSdfMaxEvents) continue;
       if (free) {
-        q.upper.sdfMark = shared;
+        q.lower.sdfMark = shared;
       } else {
         events++;
       }
@@ -673,9 +674,9 @@ class _MetaballRenderer {
   }
 
   /// Merges [bubbles] and [pairs] (both in layer order) into the bottom-to-top event list:
-  /// a bubble's necks to lower bubbles go right before it, the last of them also drawing the
-  /// bubble; necks whose upper bubble isn't in the tile go alone. Writes the events into
-  /// [shader] if given; returns their count.
+  /// a bubble's necks to higher bubbles go right after it, the first of them also drawing the
+  /// bubble before its neck; necks whose lower bubble isn't in the tile go alone. Writes the
+  /// events into [shader] if given; returns their count.
   int _writeEvents(
     List<_Bubble> bubbles,
     List<_SdfPair> pairs,
@@ -685,7 +686,7 @@ class _MetaballRenderer {
     int p = 0;
     for (int k = 0; k < bubbles.length; k++) {
       final b = bubbles[k];
-      while (p < pairs.length && pairs[p].upper.index < b.index) {
+      while (p < pairs.length && pairs[p].lower.index < b.index) {
         if (shader != null) {
           _setEvent(shader, events, pairs[p].lower, pairs[p].upper, false);
         }
@@ -693,17 +694,16 @@ class _MetaballRenderer {
         p++;
       }
       bool hasNecks = false;
-      while (p < pairs.length && identical(pairs[p].upper, b)) {
-        final last = p + 1 == pairs.length || !identical(pairs[p + 1].upper, b);
+      while (p < pairs.length && identical(pairs[p].lower, b)) {
         if (shader != null) {
-          _setEvent(shader, events, pairs[p].lower, b, last);
+          _setEvent(shader, events, b, pairs[p].upper, !hasNecks);
         }
         events++;
         p++;
         hasNecks = true;
       }
       if (!hasNecks) {
-        if (shader != null) _setEvent(shader, events, null, b, true);
+        if (shader != null) _setEvent(shader, events, b, null, true);
         events++;
       }
     }
@@ -717,44 +717,44 @@ class _MetaballRenderer {
     return events;
   }
 
-  /// Event [slot]: the neck between [lower] and [upper] (none if [lower] is null), then
-  /// [upper] itself if [drawUpper] (flagged by storing its opacity o as -1 - o otherwise).
+  /// Event [slot]: [lower] itself if [drawLower] (flagged by storing its opacity o as -1 - o
+  /// otherwise), then the neck between [lower] and [upper] (none if [upper] is null).
   void _setEvent(
     ui.FragmentShader shader,
     int slot,
-    _Bubble? lower,
-    _Bubble upper,
-    bool drawUpper,
+    _Bubble lower,
+    _Bubble? upper,
+    bool drawLower,
   ) {
     final a = _kSdfEventsABase + slot * 4;
     final b = _kSdfEventsBBase + slot * 4;
     final c = _kSdfEventsCBase + slot * 4;
-    if (lower != null) {
+    final opacity = max(0.0, lower.opacity);
+    shader
+      ..setFloat(a, lower.position.dx)
+      ..setFloat(a + 1, lower.position.dy)
+      ..setFloat(a + 2, lower.radius)
+      ..setFloat(a + 3, drawLower ? opacity : -1 - opacity)
+      ..setFloat(c, _packRgb(lower.color))
+      ..setFloat(c + 1, _packRgb(lower.colorMask));
+    if (upper != null) {
       shader
-        ..setFloat(a, lower.position.dx)
-        ..setFloat(a + 1, lower.position.dy)
-        ..setFloat(a + 2, lower.radius)
-        ..setFloat(a + 3, lower.opacity)
-        ..setFloat(c, _packRgb(lower.color))
-        ..setFloat(c + 1, _packRgb(lower.colorMask));
+        ..setFloat(b, upper.position.dx)
+        ..setFloat(b + 1, upper.position.dy)
+        ..setFloat(b + 2, upper.radius)
+        ..setFloat(b + 3, upper.opacity)
+        ..setFloat(c + 2, _packRgb(upper.color))
+        ..setFloat(c + 3, _packRgb(upper.colorMask));
     } else {
       // No neck: far away and zero radius, so the smooth union adds nothing.
       shader
-        ..setFloat(a, -100000)
-        ..setFloat(a + 1, -100000)
-        ..setFloat(a + 2, 0)
-        ..setFloat(a + 3, 0)
-        ..setFloat(c, 0)
-        ..setFloat(c + 1, 0);
+        ..setFloat(b, -100000)
+        ..setFloat(b + 1, -100000)
+        ..setFloat(b + 2, 0)
+        ..setFloat(b + 3, 0)
+        ..setFloat(c + 2, 0)
+        ..setFloat(c + 3, 0);
     }
-    final opacity = max(0.0, upper.opacity);
-    shader
-      ..setFloat(b, upper.position.dx)
-      ..setFloat(b + 1, upper.position.dy)
-      ..setFloat(b + 2, upper.radius)
-      ..setFloat(b + 3, drawUpper ? opacity : -1 - opacity)
-      ..setFloat(c + 2, _packRgb(upper.color))
-      ..setFloat(c + 3, _packRgb(upper.colorMask));
   }
 
   /// Sorts [spots] by the alpha each one is guaranteed to have everywhere in the tile

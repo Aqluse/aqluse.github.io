@@ -14,16 +14,16 @@ const int kMaxSpotGroups = 32;
 // loop counter only; spots go in groups of 4 (unused slots are padded with dummies that
 // contribute nothing).
 //
-// Events are listed bottom to top (layer order). Each event holds two bubbles: first the neck
-// between `lower` and `upper` is stacked (a far away dummy `lower` with zero radius means no
-// neck), then, if flagged, the upper bubble itself. A bubble with necks to lower bubbles is
-// flagged on its last neck event, so its necks lie right under it and above every bubble with
-// a lower index.
+// Events are listed bottom to top (layer order). Each event holds two bubbles: first, if
+// flagged, the lower bubble itself is stacked, then the neck between `lower` and `upper` (a far
+// away dummy `upper` with zero radius means no neck). A bubble with necks to higher bubbles is
+// flagged on its first neck event, so its necks lie right above it, under every bubble with a
+// higher index.
 uniform vec4 uParams0;                // 0-3: k, AA width (logical px), color sharpness, depth clamp
 uniform vec4 uParams1;                // 4-7: size bias, reference radius, event count, group count
-uniform vec4 uEventsA[kMaxEvents];    // 8-167: lower bubble: center x, center y, radius, opacity
-uniform vec4 uEventsB[kMaxEvents];    // 168-327: upper bubble: center x, center y, radius, and
+uniform vec4 uEventsA[kMaxEvents];    // 8-167: lower bubble: center x, center y, radius, and
                                       // opacity o if the bubble is drawn here, else -1 - o
+uniform vec4 uEventsB[kMaxEvents];    // 168-327: upper bubble: center x, center y, radius, opacity
 uniform vec4 uEventsC[kMaxEvents];    // 328-487: packed rgb: surface lower, mask lower,
                                       // surface upper, mask upper
 uniform vec4 uSpotsA[kMaxSpotGroups]; // 488-615: spots 4i..4i+3 as 4 x (x, y, radius),
@@ -108,10 +108,28 @@ void main() {
     vec4 lowB = uEventsA[i];
     vec4 upB = uEventsB[i];
     vec4 colors = uEventsC[i];
-    // The upper bubble with its opacity decoded from the flag: o >= 0 as is, -1 - o -> o.
-    vec4 ub = vec4(upB.xyz, abs(upB.w + 0.5) - 0.5);
-    float du = distance(p, ub.xy) - ub.z;
-    float dl = distance(p, lowB.xy) - lowB.z;
+    // The lower bubble with its opacity decoded from the flag: o >= 0 as is, -1 - o -> o.
+    vec4 lb = vec4(lowB.xyz, abs(lowB.w + 0.5) - 0.5);
+    float dl = distance(p, lb.xy) - lb.z;
+    float du = distance(p, upB.xy) - upB.z;
+
+    // The lower bubble itself, under its necks.
+    if (lowB.w >= 0.0) {
+      d = smin(d, dl, k);
+      float w = weight(dl, lb.z);
+      vec4 bs = vec4(unpackRgb(colors.x) * lb.w, lb.w);
+      vec4 bm = vec4(unpackRgb(colors.y) * lb.w, lb.w);
+      float bg = glowAlpha(p, lb);
+      wSum += w;
+      surface += w * bs;
+      mask += w * bm;
+      glow += w * bg;
+      float ci = stacking * clamp(0.5 - dl / edge, 0.0, 1.0);
+      stackSurface = mix(stackSurface, bs, ci);
+      stackMask = mix(stackMask, bm, ci);
+      stackGlow = mix(stackGlow, bg, ci);
+      stackKeep *= 1.0 - ci;
+    }
 
     // Neck: only the coverage the pair's smooth union adds to the two shapes (0 inside either
     // bubble and wherever they don't fuse), colored by the pair's weighted blend.
@@ -120,39 +138,21 @@ void main() {
             clamp(0.5 - min(dl, du) / edge, 0.0, 1.0),
         0.0);
     if (cn > 0.0) {
-      float wl = weight(dl, lowB.z);
-      float wu = weight(du, ub.z);
+      float wl = weight(dl, lb.z);
+      float wu = weight(du, upB.z);
       float wn = wl + wu;
       if (wn > 0.0) {
         float invN = 1.0 / wn;
-        vec4 ns = (wl * vec4(unpackRgb(colors.x) * lowB.w, lowB.w) +
-            wu * vec4(unpackRgb(colors.z) * ub.w, ub.w)) * invN;
-        vec4 nm = (wl * vec4(unpackRgb(colors.y) * lowB.w, lowB.w) +
-            wu * vec4(unpackRgb(colors.w) * ub.w, ub.w)) * invN;
-        float ng = (wl * glowAlpha(p, lowB) + wu * glowAlpha(p, ub)) * invN;
+        vec4 ns = (wl * vec4(unpackRgb(colors.x) * lb.w, lb.w) +
+            wu * vec4(unpackRgb(colors.z) * upB.w, upB.w)) * invN;
+        vec4 nm = (wl * vec4(unpackRgb(colors.y) * lb.w, lb.w) +
+            wu * vec4(unpackRgb(colors.w) * upB.w, upB.w)) * invN;
+        float ng = (wl * glowAlpha(p, lb) + wu * glowAlpha(p, upB)) * invN;
         stackSurface = mix(stackSurface, ns, cn);
         stackMask = mix(stackMask, nm, cn);
         stackGlow = mix(stackGlow, ng, cn);
         stackKeep *= 1.0 - cn;
       }
-    }
-
-    // The upper bubble itself, on top of its necks.
-    if (upB.w >= 0.0) {
-      d = smin(d, du, k);
-      float w = weight(du, ub.z);
-      vec4 bs = vec4(unpackRgb(colors.z) * ub.w, ub.w);
-      vec4 bm = vec4(unpackRgb(colors.w) * ub.w, ub.w);
-      float bg = glowAlpha(p, ub);
-      wSum += w;
-      surface += w * bs;
-      mask += w * bm;
-      glow += w * bg;
-      float ci = stacking * clamp(0.5 - du / edge, 0.0, 1.0);
-      stackSurface = mix(stackSurface, bs, ci);
-      stackMask = mix(stackMask, bm, ci);
-      stackGlow = mix(stackGlow, bg, ci);
-      stackKeep *= 1.0 - ci;
     }
   }
 
