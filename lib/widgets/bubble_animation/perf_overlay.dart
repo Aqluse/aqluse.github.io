@@ -163,28 +163,61 @@ class _PerfOverlayState extends State<_PerfOverlay>
       .done => '✅ ALL $_runs RUNS DONE — last: $_result (tap to restart)',
     };
 
-    return GestureDetector(
-      onTap: _restart,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.6),
-          borderRadius: .circular(8),
-        ),
-        child: Padding(
-          padding: const .all(8),
-          child: Text(
-            'live ${_liveFps.toStringAsFixed(0)} FPS\n'
-            '$phaseLine\n'
-            '${_statsLine()}',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontFamily: 'monospace',
-              height: 1.4,
+    const textStyle = TextStyle(
+      color: Colors.white,
+      fontSize: 12,
+      fontFamily: 'monospace',
+      height: 1.4,
+    );
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.6),
+        borderRadius: .circular(8),
+      ),
+      child: Padding(
+        padding: const .all(8),
+        child: Column(
+          mainAxisSize: .min,
+          crossAxisAlignment: .start,
+          children: [
+            // Only the text restarts the measurement, so dragging the slider doesn't.
+            GestureDetector(
+              onTap: _restart,
+              child: Text(
+                'live ${_liveFps.toStringAsFixed(0)} FPS\n'
+                '$phaseLine\n'
+                '${_statsLine()}',
+                style: textStyle,
+              ),
             ),
-          ),
+            if (_kUseSdf) _buildFadeSlider(textStyle),
+          ],
         ),
       ),
     );
   }
+
+  /// Runtime tuning of the SDF color cross-fade width (PERF_SDF_FADE).
+  Widget _buildFadeSlider(TextStyle textStyle) {
+    return Row(
+      mainAxisSize: .min,
+      children: [
+        Text('fade ${_sdfColorFade.toStringAsFixed(2)} px', style: textStyle),
+        SizedBox(
+          width: 320,
+          child: Slider(
+            value: _sdfColorFade.clamp(_kFadeMin, _kFadeMax),
+            min: _kFadeMin,
+            max: _kFadeMax,
+            divisions: ((_kFadeMax - _kFadeMin) / 0.05).round(),
+            onChanged: (value) => setState(() => _sdfColorFade = value),
+          ),
+        ),
+      ],
+    );
+  }
+
+  static const double _kFadeMin = 0.25;
+  static const double _kFadeMax = 6;
 }
