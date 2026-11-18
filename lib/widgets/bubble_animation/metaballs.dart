@@ -105,7 +105,7 @@ double _sdfStacking =
     const String.fromEnvironment('PERF_SDF_STACKING', defaultValue: 'on') ==
         'off'
     ? 0
-    : 1;
+    : 0.95; // tuned by eye with the overlay slider: lower bubbles barely show through
 
 String _sdfTunablesLine() =>
     'k $_sdfSmoothing · neck fade ${_sdfColorFade.toStringAsFixed(2)} · edge fade ${_sdfEdgeFade.toStringAsFixed(2)} · '
