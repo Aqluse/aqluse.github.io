@@ -197,9 +197,9 @@ class _PerfOverlayState extends State<_PerfOverlay>
                 textStyle,
                 label: 'stacking',
                 value: _sdfStacking,
-                min: 0,
+                min: 0.5,
                 max: 1,
-                step: 0.05,
+                step: 0.005,
                 onChanged: (value) => _sdfStacking = value,
               ),
           ],
@@ -223,7 +223,7 @@ class _PerfOverlayState extends State<_PerfOverlay>
       children: [
         SizedBox(
           width: 170,
-          child: Text('$label ${value.toStringAsFixed(2)}', style: textStyle),
+          child: Text('$label ${value.toStringAsFixed(3)}', style: textStyle),
         ),
         SizedBox(
           width: 320,
