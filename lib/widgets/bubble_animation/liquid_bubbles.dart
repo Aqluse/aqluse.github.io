@@ -76,7 +76,8 @@ class _LiquidBubblesState extends State<LiquidBubbles>
       final timeDelta =
           (elapsed - lastElapsed).inMicroseconds / microsecondsInSecond;
 
-      _manager.onTick(processTimeDelta(timeDelta));
+      // PERF: the overlay can pause the animation to compare debug views on one frame.
+      if (!_perfPaused) _manager.onTick(processTimeDelta(timeDelta));
     })..start();
     SchedulerBinding.instance.addPostFrameCallback((_) => _manager.init());
   }

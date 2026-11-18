@@ -435,6 +435,9 @@ class _PaintManager extends ChangeNotifier {
     _canvasSizeUpdated = false;
   }
 
+  /// PERF: repaints without advancing the animation (used while paused).
+  void requestRepaint() => notifyListeners();
+
   void handleTap(Offset tapPos) {
     for (int i = bubbles.length - 1; i >= 0; i--) {
       final b = bubbles[i];
