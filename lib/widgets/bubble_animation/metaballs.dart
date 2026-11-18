@@ -73,6 +73,10 @@ double _spotAlphaAt(double distance, double radius) {
   return min(1, _sdfSpotStrength * pow(1 - t, _sdfSpotFalloff));
 }
 
+/// PERF debug view in the shader: 0 = off, 1 = mask alpha, 2 = spots covering the pixel / 20.
+/// Switched at runtime with the overlay slider (PERF_TUNING_SLIDERS=true).
+double _sdfDebugView = 0;
+
 /// PERF_SDF_DEPTH: how deep inside a bubble (logical px) its weight keeps growing. Small values
 /// make every bubble covering a pixel weigh the same, so overlaps are decided by
 /// PERF_SDF_SIZE_BIAS instead of by depth.
@@ -1130,7 +1134,8 @@ class _MetaballRenderer {
       ..setFloat(_kSdfParams2Base + 1, _sdfEdgeFade)
       ..setFloat(_kSdfParams2Base + 2, _sdfSpotStrength)
       ..setFloat(_kSdfParams2Base + 3, _sdfSpotCore)
-      ..setFloat(_kSdfParams2Base + 4, _sdfSpotFalloff);
+      ..setFloat(_kSdfParams2Base + 4, _sdfSpotFalloff)
+      ..setFloat(_kSdfParams2Base + 5, _sdfDebugView);
 
     for (int k = 0; k < groupCount * 4; k++) {
       final double x, y, r;

@@ -204,12 +204,12 @@ class _PerfOverlayState extends State<_PerfOverlay>
             if (_kUseSdf && _kPerfTuningSliders)
               _buildSlider(
                 textStyle,
-                label: 'stacking',
-                value: _sdfStacking,
-                min: 0.5,
-                max: 1,
-                step: 0.005,
-                onChanged: (value) => _sdfStacking = value,
+                label: 'debug view',
+                value: _sdfDebugView,
+                min: 0,
+                max: 2,
+                step: 1,
+                onChanged: (value) => _sdfDebugView = value,
               ),
           ],
         ),
