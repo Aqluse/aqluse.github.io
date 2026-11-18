@@ -25,6 +25,12 @@ class _PaintManager extends ChangeNotifier {
   int statSdfMaxTilePairs = 0;
   int statSdfDroppedPairs = 0;
 
+  /// Per frame: pairs skipped because higher bubbles hide the whole neck, and pairs and
+  /// bubbles skipped in tiles fully covered by higher bubbles (summed over tiles).
+  int statSdfOccludedPairs = 0;
+  int statSdfTileOccludedPairs = 0;
+  int statSdfTileOccludedBubbles = 0;
+
   void resetSdfStats() {
     statSdfMaxTileBubbles = 0;
     statSdfMaxTileSpots = 0;
