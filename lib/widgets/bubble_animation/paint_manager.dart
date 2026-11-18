@@ -20,10 +20,17 @@ class _PaintManager extends ChangeNotifier {
   int statSdfMaxTileSpots = 0;
   int statSdfDropped = 0;
 
+  /// Fusing bubble pairs (necks) per frame, max per drawn tile and dropped on overflow.
+  int statSdfPairs = 0;
+  int statSdfMaxTilePairs = 0;
+  int statSdfDroppedPairs = 0;
+
   void resetSdfStats() {
     statSdfMaxTileBubbles = 0;
     statSdfMaxTileSpots = 0;
     statSdfDropped = 0;
+    statSdfMaxTilePairs = 0;
+    statSdfDroppedPairs = 0;
   }
 
   final _SortedBubbleList bubbles = _SortedBubbleList();
