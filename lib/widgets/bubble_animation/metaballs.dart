@@ -9,9 +9,10 @@ double _sdfEnv(String value, double fallback, {double minValue = 0}) =>
 
 // Look tunables (PERF): `--dart-define=NAME=value`; defaults keep the original SDF look.
 
-/// PERF_SDF_K: smooth-min distance (logical px). Shape fusion: bubbles closer than this grow a
+/// PERF_SDF_K: smooth-min distance (logical px; initial value, adjustable at runtime with the
+/// overlay slider). Shape fusion: bubbles closer than this grow a
 /// neck towards each other. Also the culling margin and the color weight cutoff.
-final double _kSdfSmoothing = _sdfEnv(
+double _sdfSmoothing = _sdfEnv(
   const String.fromEnvironment('PERF_SDF_K'),
   24,
   minValue: 0.01,
@@ -102,7 +103,7 @@ const bool _kSdfStacking =
     String.fromEnvironment('PERF_SDF_STACKING', defaultValue: 'on') != 'off';
 
 String _sdfTunablesLine() =>
-    'k $_kSdfSmoothing · neck fade ${_sdfColorFade.toStringAsFixed(2)} · edge fade ${_sdfEdgeFade.toStringAsFixed(2)} · '
+    'k $_sdfSmoothing · neck fade ${_sdfColorFade.toStringAsFixed(2)} · edge fade ${_sdfEdgeFade.toStringAsFixed(2)} · '
     'depth $_kSdfDepthClamp · sizeBias $_kSdfSizeBias · aa $_kSdfAaWidth · '
     'stacking ${_kSdfStacking ? 'on' : 'off'}';
 
@@ -176,7 +177,7 @@ class _MetaballRenderer {
 
     final w = size.width;
     final h = size.height;
-    final bubbleReach = manager.maxBubbleRadius + _kSdfSmoothing;
+    final bubbleReach = manager.maxBubbleRadius + _sdfSmoothing;
     final spotReach = manager.maxSpotRadius * _sdfSpotSize;
 
     for (double top = 0; top < h; top += _kSdfTileSize) {
@@ -253,7 +254,7 @@ class _MetaballRenderer {
       if (_circleHitsRect(
         b.position.dx,
         b.position.dy,
-        b.radius + _kSdfSmoothing,
+        b.radius + _sdfSmoothing,
         left,
         top,
         right,
@@ -422,7 +423,7 @@ class _MetaballRenderer {
     }
 
     shader
-      ..setFloat(0, _kSdfSmoothing)
+      ..setFloat(0, _sdfSmoothing)
       ..setFloat(1, _pixelSize * _kSdfAaWidth)
       ..setFloat(2, 1 / _sdfColorFade)
       ..setFloat(3, _kSdfDepthClamp)
