@@ -100,9 +100,7 @@ final double _kSdfAaWidth = _sdfEnv(
 /// transition over max(fade, AA width) across its edge; necks outside all bubbles still use the
 /// weighted blend. `off` = weighted blend everywhere (lower bubbles show through). The value is
 /// the stacking strength from 0 (off) to 1 (on), adjustable at runtime with the overlay slider;
-/// values in between let lower bubbles partially show through. Necks are layered too: a neck
-/// between two bubbles is stacked at the higher one's layer (see shaders/metaballs.frag), so it is
-/// visible over lower bubbles, as the old renderer's bridges were not.
+/// values in between let lower bubbles partially show through.
 double _sdfStacking =
     const String.fromEnvironment('PERF_SDF_STACKING', defaultValue: 'on') ==
         'off'
