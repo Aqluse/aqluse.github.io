@@ -58,6 +58,9 @@ class _Bubble {
   /// Scratch sort key for the metaball renderer's overflow handling.
   double sortKey = 0;
 
+  /// Scratch stamp for the metaball renderer's neck overflow handling.
+  int sdfMark = 0;
+
   final Random _random;
   late final Color _color;
   late Color color;

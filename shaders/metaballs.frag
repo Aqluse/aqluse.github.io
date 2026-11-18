@@ -4,25 +4,33 @@
 
 precision highp float;
 
-// Capacities: 2 * kMaxBubblePairs bubbles and 4 * kMaxSpotGroups spots per draw.
-// Must match _kSdfMaxBubbles / _kSdfMaxSpots in metaballs.dart.
-// Uniform budget: 3 + 32 * 3 + 32 * 3 = 195 vec4.
-const int kMaxBubblePairs = 32;
+// Capacities: kMaxEvents events and 4 * kMaxSpotGroups spots per draw.
+// Must match _kSdfMaxEvents / _kSdfMaxSpots in metaballs.dart.
+// Uniform budget: 4 + 40 * 3 + 32 * 3 = 220 vec4.
+const int kMaxEvents = 40;
 const int kMaxSpotGroups = 32;
 
 // Float indices are listed for setFloat() in metaballs.dart. Every array is indexed by the
-// loop counter only; bubbles go in pairs and spots in groups of 4 (unused slots are padded
-// with dummies that contribute nothing).
-uniform vec4 uParams0;                  // 0-3: k, AA width (logical px), color sharpness, depth clamp
-uniform vec4 uParams1;                  // 4-7: size bias, reference radius, pair count, group count
-uniform vec4 uBubblesA[kMaxBubblePairs];// 8-135: bubble 2i: center x, center y, radius, opacity
-uniform vec4 uBubblesB[kMaxBubblePairs];// 136-263: bubble 2i+1, same layout
-uniform vec4 uColors[kMaxBubblePairs];  // 264-391: packed rgb: surface 2i, mask 2i, surface 2i+1, mask 2i+1
-uniform vec4 uSpotsA[kMaxSpotGroups];   // 392-519: spots 4i..4i+3 as 4 x (x, y, radius),
-uniform vec4 uSpotsB[kMaxSpotGroups];   // 520-647: spread over A, B, C
-uniform vec4 uSpotsC[kMaxSpotGroups];   // 648-775
-uniform vec4 uParams2;                  // 776-779: stacking (0 or 1), edge fade (logical px), spot strength, spot core
-uniform vec4 uParams3;                  // 780-783: spot falloff exponent, unused, unused, unused
+// loop counter only; spots go in groups of 4 (unused slots are padded with dummies that
+// contribute nothing).
+//
+// Events are listed bottom to top (layer order). Each event holds two bubbles: first the neck
+// between `lower` and `upper` is stacked (a far away dummy `lower` with zero radius means no
+// neck), then, if flagged, the upper bubble itself. A bubble with necks to lower bubbles is
+// flagged on its last neck event, so its necks lie right under it and above every bubble with
+// a lower index.
+uniform vec4 uParams0;                // 0-3: k, AA width (logical px), color sharpness, depth clamp
+uniform vec4 uParams1;                // 4-7: size bias, reference radius, event count, group count
+uniform vec4 uEventsA[kMaxEvents];    // 8-167: lower bubble: center x, center y, radius, opacity
+uniform vec4 uEventsB[kMaxEvents];    // 168-327: upper bubble: center x, center y, radius, and
+                                      // opacity o if the bubble is drawn here, else -1 - o
+uniform vec4 uEventsC[kMaxEvents];    // 328-487: packed rgb: surface lower, mask lower,
+                                      // surface upper, mask upper
+uniform vec4 uSpotsA[kMaxSpotGroups]; // 488-615: spots 4i..4i+3 as 4 x (x, y, radius),
+uniform vec4 uSpotsB[kMaxSpotGroups]; // 616-743: spread over A, B, C
+uniform vec4 uSpotsC[kMaxSpotGroups]; // 744-871
+uniform vec4 uParams2;                // 872-875: stacking (0 or 1), edge fade (logical px), spot strength, spot core
+uniform vec4 uParams3;                // 876-879: spot falloff exponent, unused, unused, unused
 
 out vec4 fragColor;
 
@@ -82,10 +90,10 @@ void main() {
   vec4 mask = vec4(0.0);    // premultiplied
   float glow = 0.0;         // white, premultiplied alpha
 
-  // Stacking: bubbles arrive bottom to top (list order), so lerping towards each bubble's
-  // values by its own edge coverage leaves the top covering bubble's values inside bubbles,
-  // with a soft transition across its edge. stackKeep = how much of the pixel is outside every
-  // bubble (there the weighted blend is used, as for the necks).
+  // Stacking: bubbles and necks arrive bottom to top (event order), so lerping towards each
+  // one's values by its own coverage leaves the top covering one's values, with a soft
+  // transition across its edge. stackKeep = how much of the pixel is outside every bubble and
+  // stacked neck (there the weighted blend is used).
   float stacking = uParams2.x;
   // Transition width across the top bubble's edge, separate from the neck color fade.
   float edge = max(uParams2.y, uParams0.y);
@@ -94,44 +102,58 @@ void main() {
   float stackGlow = 0.0;
   float stackKeep = 1.0;
 
-  int pairs = int(uParams1.z);
-  for (int i = 0; i < kMaxBubblePairs; i++) {
-    if (i >= pairs) break;
-    vec4 colors = uColors[i];
+  int events = int(uParams1.z);
+  for (int i = 0; i < kMaxEvents; i++) {
+    if (i >= events) break;
+    vec4 lowB = uEventsA[i];
+    vec4 upB = uEventsB[i];
+    vec4 colors = uEventsC[i];
+    // The upper bubble with its opacity decoded from the flag: o >= 0 as is, -1 - o -> o.
+    vec4 ub = vec4(upB.xyz, abs(upB.w + 0.5) - 0.5);
+    float du = distance(p, ub.xy) - ub.z;
+    float dl = distance(p, lowB.xy) - lowB.z;
 
-    vec4 b = uBubblesA[i];
-    float di = distance(p, b.xy) - b.z;
-    d = smin(d, di, k);
-    float w = weight(di, b.z);
-    vec4 bs = vec4(unpackRgb(colors.x) * b.w, b.w);
-    vec4 bm = vec4(unpackRgb(colors.y) * b.w, b.w);
-    float bg = glowAlpha(p, b);
-    wSum += w;
-    surface += w * bs;
-    mask += w * bm;
-    glow += w * bg;
-    float ci = stacking * clamp(0.5 - di / edge, 0.0, 1.0);
-    stackSurface = mix(stackSurface, bs, ci);
-    stackMask = mix(stackMask, bm, ci);
-    stackGlow = mix(stackGlow, bg, ci);
-    stackKeep *= 1.0 - ci;
+    // Neck: only the coverage the pair's smooth union adds to the two shapes (0 inside either
+    // bubble and wherever they don't fuse), colored by the pair's weighted blend.
+    float cn = stacking * max(
+        clamp(0.5 - smin(dl, du, k) / edge, 0.0, 1.0) -
+            clamp(0.5 - min(dl, du) / edge, 0.0, 1.0),
+        0.0);
+    if (cn > 0.0) {
+      float wl = weight(dl, lowB.z);
+      float wu = weight(du, ub.z);
+      float wn = wl + wu;
+      if (wn > 0.0) {
+        float invN = 1.0 / wn;
+        vec4 ns = (wl * vec4(unpackRgb(colors.x) * lowB.w, lowB.w) +
+            wu * vec4(unpackRgb(colors.z) * ub.w, ub.w)) * invN;
+        vec4 nm = (wl * vec4(unpackRgb(colors.y) * lowB.w, lowB.w) +
+            wu * vec4(unpackRgb(colors.w) * ub.w, ub.w)) * invN;
+        float ng = (wl * glowAlpha(p, lowB) + wu * glowAlpha(p, ub)) * invN;
+        stackSurface = mix(stackSurface, ns, cn);
+        stackMask = mix(stackMask, nm, cn);
+        stackGlow = mix(stackGlow, ng, cn);
+        stackKeep *= 1.0 - cn;
+      }
+    }
 
-    b = uBubblesB[i];
-    di = distance(p, b.xy) - b.z;
-    d = smin(d, di, k);
-    w = weight(di, b.z);
-    bs = vec4(unpackRgb(colors.z) * b.w, b.w);
-    bm = vec4(unpackRgb(colors.w) * b.w, b.w);
-    bg = glowAlpha(p, b);
-    wSum += w;
-    surface += w * bs;
-    mask += w * bm;
-    glow += w * bg;
-    ci = stacking * clamp(0.5 - di / edge, 0.0, 1.0);
-    stackSurface = mix(stackSurface, bs, ci);
-    stackMask = mix(stackMask, bm, ci);
-    stackGlow = mix(stackGlow, bg, ci);
-    stackKeep *= 1.0 - ci;
+    // The upper bubble itself, on top of its necks.
+    if (upB.w >= 0.0) {
+      d = smin(d, du, k);
+      float w = weight(du, ub.z);
+      vec4 bs = vec4(unpackRgb(colors.z) * ub.w, ub.w);
+      vec4 bm = vec4(unpackRgb(colors.w) * ub.w, ub.w);
+      float bg = glowAlpha(p, ub);
+      wSum += w;
+      surface += w * bs;
+      mask += w * bm;
+      glow += w * bg;
+      float ci = stacking * clamp(0.5 - du / edge, 0.0, 1.0);
+      stackSurface = mix(stackSurface, bs, ci);
+      stackMask = mix(stackMask, bm, ci);
+      stackGlow = mix(stackGlow, bg, ci);
+      stackKeep *= 1.0 - ci;
+    }
   }
 
   // Anti-aliased coverage over the AA width.
@@ -144,8 +166,8 @@ void main() {
     mask *= invW;
     glow *= invW;
 
-    // Inside bubbles: the stacked (top bubble) values; the stack sums started from 0 and
-    // carry total weight `inside`, hence the normalization.
+    // Inside bubbles and stacked necks: the stacked (top) values; the stack sums started from 0
+    // and carry total weight `inside`, hence the normalization.
     float inside = 1.0 - stackKeep;
     if (inside > 0.0) {
       float invInside = 1.0 / inside;
