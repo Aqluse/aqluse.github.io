@@ -31,7 +31,7 @@ uniform vec4 uSpotsA[kMaxSpotGroups]; // 488-615: spots 4i..4i+3 as 4 x (x, y, r
 uniform vec4 uSpotsB[kMaxSpotGroups]; // 616-743: spread over A, B, C
 uniform vec4 uSpotsC[kMaxSpotGroups]; // 744-871
 uniform vec4 uParams2;                // 872-875: stacking (0 or 1), edge fade (logical px), spot strength, spot core
-uniform vec4 uParams3;                // 876-879: spot falloff exponent, unused, unused, unused
+uniform vec4 uParams3;                // 876-879: spot falloff exponent, debug view (0 off, 1 mask alpha, 2 spot count), unused, unused
 
 out vec4 fragColor;
 
@@ -220,6 +220,8 @@ void main() {
   float coverage = clamp(0.5 - d / uParams0.y, 0.0, 1.0);
 
   vec4 c = vec4(0.0);
+  float dbgMaskAlpha = 0.0;
+  float dbgSpots = 0.0;
   if (coverage > 0.0 && wSum > 0.0) {
     float invW = 1.0 / wSum;
     surface *= invW;
@@ -245,18 +247,34 @@ void main() {
       vec4 a = uSpotsA[j];
       vec4 b = uSpotsB[j];
       vec4 s = uSpotsC[j];
-      keep *= spotKeep(p, a.xyz, o);
-      keep *= spotKeep(p, vec3(a.w, b.x, b.y), o);
-      keep *= spotKeep(p, vec3(b.z, b.w, s.x), o);
-      keep *= spotKeep(p, s.yzw, o);
+      float sk = spotKeep(p, a.xyz, o);
+      keep *= sk;
+      dbgSpots += step(sk, 0.999);
+      sk = spotKeep(p, vec3(a.w, b.x, b.y), o);
+      keep *= sk;
+      dbgSpots += step(sk, 0.999);
+      sk = spotKeep(p, vec3(b.z, b.w, s.x), o);
+      keep *= sk;
+      dbgSpots += step(sk, 0.999);
+      sk = spotKeep(p, s.yzw, o);
+      keep *= sk;
+      dbgSpots += step(sk, 0.999);
     }
     float maskAlpha = 1.0 - keep;
+    dbgMaskAlpha = maskAlpha;
     vec3 maskRgb = mask.rgb / max(mask.a, 0.00001);
 
     c = surface;
     c = over(vec4(maskRgb * maskAlpha, maskAlpha), c);
     c = over(vec4(glow), c);
     c *= coverage;
+  }
+
+  // Debug views (PERF): grayscale mask alpha, or the number of spots covering the pixel / 20.
+  float dbg = uParams3.y;
+  if (dbg > 0.5) {
+    float v = dbg < 1.5 ? dbgMaskAlpha : min(dbgSpots / 20.0, 1.0);
+    c = vec4(vec3(v), 1.0) * clamp(0.5 - d / uParams0.y, 0.0, 1.0);
   }
 
   fragColor = c;
