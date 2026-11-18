@@ -140,15 +140,14 @@ void main() {
     stackMask = mix(stackMask, bm, ci);
     stackGlow = mix(stackGlow, bg, ci);
     stackKeep *= 1.0 - ci;
-    // Remember it for the necks of higher bubbles, unless the pixel is inside it. The inclusion
-    // fades in over the edge width (a hard in/out switch made the neck shape jump at every
-    // bubble edge, producing spikes).
-    float o = clamp(0.5 + di / edge, 0.0, 1.0);
-    nDist = mix(nDist, smin(nDist, di, k), o);
-    nW += w * o;
-    nSurface += w * o * bs;
-    nMask += w * o * bm;
-    nGlow += w * o * bg;
+    // Remember it for the necks of higher bubbles, unless the pixel is inside it.
+    if (di >= 0.0) {
+      nDist = smin(nDist, di, k);
+      nW += w;
+      nSurface += w * bs;
+      nMask += w * bm;
+      nGlow += w * bg;
+    }
 
     // ---- Bubble 2i + 1 ----
     b = uBubblesB[i];
@@ -179,12 +178,13 @@ void main() {
     stackMask = mix(stackMask, bm, ci);
     stackGlow = mix(stackGlow, bg, ci);
     stackKeep *= 1.0 - ci;
-    o = clamp(0.5 + di / edge, 0.0, 1.0);
-    nDist = mix(nDist, smin(nDist, di, k), o);
-    nW += w * o;
-    nSurface += w * o * bs;
-    nMask += w * o * bm;
-    nGlow += w * o * bg;
+    if (di >= 0.0) {
+      nDist = smin(nDist, di, k);
+      nW += w;
+      nSurface += w * bs;
+      nMask += w * bm;
+      nGlow += w * bg;
+    }
   }
 
   // Anti-aliased coverage over the AA width.
