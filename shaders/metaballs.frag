@@ -30,8 +30,7 @@ uniform vec4 uEventsC[kMaxEventPairs];  // 328-487: packed rgb: surface 2i, mask
 uniform vec4 uSpotsA[kMaxSpotGroups]; // 488-615: spots 4i..4i+3 as 4 x (x, y, radius),
 uniform vec4 uSpotsB[kMaxSpotGroups]; // 616-743: spread over A, B, C
 uniform vec4 uSpotsC[kMaxSpotGroups]; // 744-871
-uniform vec4 uParams2;                // 872-875: stacking (0 or 1), edge fade (logical px), spot strength, spot core
-uniform vec4 uParams3;                // 876-879: spot falloff exponent, debug view (0 off, 1 mask alpha, 2 spot count), unused, unused
+uniform vec4 uParams2;                // 872-875: stacking strength, edge fade (logical px), unused, unused
 
 out vec4 fragColor;
 
@@ -70,14 +69,12 @@ float glowAlpha(vec2 p, vec4 b) {
   return 0.3 * b.w * (1.0 - t);
 }
 
-// Mask spot: radial gradient [maskColor, transparent], solid up to the core fraction of the
-// radius, then fading as (1 - t)^falloff, scaled by strength (original: core 0.05, falloff 1,
-// strength 1). Returns the remaining transparency factor for mask opacity o.
-// Must match the culling estimate in metaballs.dart (_spotAlphaAt).
+// Mask spot: radial gradient [maskColor, transparent] with stops 0.05 and 1 (solid up to 5% of
+// the radius, then a linear fade). Returns the remaining transparency factor for mask
+// opacity o. Must match the culling estimate in metaballs.dart (_spotAlphaAt).
 float spotKeep(vec2 p, vec3 s, float o) {
-  float core = uParams2.w;
-  float t = clamp((distance(p, s.xy) / s.z - core) / max(1.0 - core, 0.001), 0.0, 1.0);
-  return 1.0 - clamp(o * uParams2.z * pow(1.0 - t, uParams3.x), 0.0, 1.0);
+  float t = clamp((distance(p, s.xy) / s.z - 0.05) / 0.95, 0.0, 1.0);
+  return 1.0 - clamp(o * (1.0 - t), 0.0, 1.0);
 }
 
 void main() {
@@ -220,8 +217,6 @@ void main() {
   float coverage = clamp(0.5 - d / uParams0.y, 0.0, 1.0);
 
   vec4 c = vec4(0.0);
-  float dbgMaskAlpha = 0.0;
-  float dbgSpots = 0.0;
   if (coverage > 0.0 && wSum > 0.0) {
     float invW = 1.0 / wSum;
     surface *= invW;
@@ -247,34 +242,18 @@ void main() {
       vec4 a = uSpotsA[j];
       vec4 b = uSpotsB[j];
       vec4 s = uSpotsC[j];
-      float sk = spotKeep(p, a.xyz, o);
-      keep *= sk;
-      dbgSpots += step(sk, 0.999);
-      sk = spotKeep(p, vec3(a.w, b.x, b.y), o);
-      keep *= sk;
-      dbgSpots += step(sk, 0.999);
-      sk = spotKeep(p, vec3(b.z, b.w, s.x), o);
-      keep *= sk;
-      dbgSpots += step(sk, 0.999);
-      sk = spotKeep(p, s.yzw, o);
-      keep *= sk;
-      dbgSpots += step(sk, 0.999);
+      keep *= spotKeep(p, a.xyz, o);
+      keep *= spotKeep(p, vec3(a.w, b.x, b.y), o);
+      keep *= spotKeep(p, vec3(b.z, b.w, s.x), o);
+      keep *= spotKeep(p, s.yzw, o);
     }
     float maskAlpha = 1.0 - keep;
-    dbgMaskAlpha = maskAlpha;
     vec3 maskRgb = mask.rgb / max(mask.a, 0.00001);
 
     c = surface;
     c = over(vec4(maskRgb * maskAlpha, maskAlpha), c);
     c = over(vec4(glow), c);
     c *= coverage;
-  }
-
-  // Debug views (PERF): grayscale mask alpha, or the number of spots covering the pixel / 20.
-  float dbg = uParams3.y;
-  if (dbg > 0.5) {
-    float v = dbg < 1.5 ? dbgMaskAlpha : min(dbgSpots / 20.0, 1.0);
-    c = vec4(vec3(v), 1.0) * clamp(0.5 - d / uParams0.y, 0.0, 1.0);
   }
 
   fragColor = c;

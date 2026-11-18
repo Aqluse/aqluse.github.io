@@ -5,24 +5,17 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
-import 'perf_report.dart';
-
 part 'metaballs.dart';
 part 'objects.dart';
 part 'paint_manager.dart';
 part 'painter.dart';
-part 'perf_overlay.dart';
 part 'spatial_grid.dart';
 
 const double? _kDebugBubbleRadius = null; //100;
 const bool _kDebugModeDrawBridgeOnTop = false;
 const bool _kDebugModeHighlightMaskPoints = false;
 
-// PERF: overridable via --dart-define=PERF_PIXELS_PER_BUBBLE=...
-const int _kPixelsPerOneBubble = int.fromEnvironment(
-  'PERF_PIXELS_PER_BUBBLE',
-  defaultValue: 30_000,
-); //75_000; //30_000; //100_000;
+const int _kPixelsPerOneBubble = 30_000; //75_000; //30_000; //100_000;
 
 /// Area per mask spot: 2 spots per 30 000 px² (the original 2 spots per bubble at the default
 /// density), independent of [_kPixelsPerOneBubble].
@@ -61,12 +54,11 @@ class _LiquidBubblesState extends State<LiquidBubbles>
   void initState() {
     super.initState();
     _painter = _Painter(manager: _manager);
-    if (_kUseSdf) {
-      ui.FragmentProgram.fromAsset('shaders/metaballs.frag').then(
-        (program) => _painter.metaballProgram = program,
-        onError: (Object e) => debugPrint('metaballs.frag failed to load: $e'),
-      );
-    }
+    // Until the shader is loaded (or if it fails to load), bubbles are drawn the old way.
+    ui.FragmentProgram.fromAsset('shaders/metaballs.frag').then(
+      (program) => _painter.metaballProgram = program,
+      onError: (Object e) => debugPrint('metaballs.frag failed to load: $e'),
+    );
 
     _ticker = createTicker((elapsed) {
       final lastElapsed = _lastElapsed;
@@ -80,8 +72,7 @@ class _LiquidBubblesState extends State<LiquidBubbles>
       final timeDelta =
           (elapsed - lastElapsed).inMicroseconds / microsecondsInSecond;
 
-      // PERF: the overlay can pause the animation to compare debug views on one frame.
-      if (!_perfPaused) _manager.onTick(processTimeDelta(timeDelta));
+      _manager.onTick(processTimeDelta(timeDelta));
     })..start();
     SchedulerBinding.instance.addPostFrameCallback((_) => _manager.init());
   }
@@ -98,22 +89,9 @@ class _LiquidBubblesState extends State<LiquidBubbles>
       builder: (context, constraints) {
         _manager.updateSize(Size(constraints.maxWidth, constraints.maxHeight));
         _painter.devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-        final bubbles = GestureDetector(
+        return GestureDetector(
           onTapDown: (d) => _manager.handleTap(d.localPosition),
           child: _CustomPaint(painter: _painter, child: widget.child),
-        );
-        if (!_kPerfOverlay) return bubbles;
-
-        return Stack(
-          fit: .expand,
-          children: [
-            bubbles,
-            Positioned(
-              left: 16,
-              top: 16,
-              child: RepaintBoundary(child: _PerfOverlay(manager: _manager)),
-            ),
-          ],
         );
       },
     );

@@ -1,120 +1,36 @@
 part of 'liquid_bubbles.dart';
 
-/// Draw bubbles as SDF metaballs with shaders/metaballs.frag;
-/// `--dart-define=PERF_SDF=off` forces the old renderer.
-const bool _kUseSdf = String.fromEnvironment('PERF_SDF') != 'off';
+/// Smooth-min distance (logical px). Shape fusion: bubbles closer than this grow a neck towards
+/// each other. Also the culling margin and the color weight cutoff.
+const double _kSdfSmoothing = 24;
 
-double _sdfEnv(String value, double fallback, {double minValue = 0}) =>
-    max(minValue, double.tryParse(value) ?? fallback);
-
-// Look tunables (PERF): `--dart-define=NAME=value`; defaults keep the original SDF look.
-
-/// PERF_SDF_K: smooth-min distance (logical px; initial value, adjustable at runtime with the
-/// overlay slider). Shape fusion: bubbles closer than this grow a
-/// neck towards each other. Also the culling margin and the color weight cutoff.
-double _sdfSmoothing = _sdfEnv(
-  const String.fromEnvironment('PERF_SDF_K'),
-  24,
-  minValue: 0.01,
-);
-
-/// PERF_SDF_FADE: width (logical px) of the color cross-fade between fusing bubbles (necks;
-/// initial value, adjustable at runtime with the overlay slider): weights are
+/// Width (logical px) of the color cross-fade between fusing bubbles (necks): weights are
 /// exp(-distance / fade).
-double _sdfColorFade = _sdfEnv(
-  const String.fromEnvironment('PERF_SDF_FADE'),
-  5, // tuned by eye with the overlay slider
-  minValue: 0.01,
-);
+const double _kSdfColorFade = 5;
 
-/// PERF_SDF_EDGE_FADE: width (logical px) of the transition across the top bubble's edge in
-/// stacking mode (initial value; adjustable at runtime with the overlay slider).
-double _sdfEdgeFade = _sdfEnv(
-  const String.fromEnvironment('PERF_SDF_EDGE_FADE'),
-  2.75, // tuned by eye with the overlay slider
-  minValue: 0.01,
-);
+/// Width (logical px) of the color transition across the top bubble's edge.
+const double _kSdfEdgeFade = 2.75;
 
-// Mask spot look (initial values; adjustable at runtime with the overlay sliders). Defaults give
-// the original profile: solid core 0.05 of the radius, then linear fade to the edge.
+/// How deep inside a bubble (logical px) its color weight keeps growing.
+const double _kSdfDepthClamp = 72;
 
-/// PERF_SPOT_SIZE: spot radius multiplier.
-double _sdfSpotSize = _sdfEnv(
-  const String.fromEnvironment('PERF_SPOT_SIZE'),
-  1,
-  minValue: 0.01,
-);
+/// Extra color weight per logical px of radius (weights * exp(radius * bias)); 0 = off.
+const double _kSdfSizeBias = 0;
 
-/// PERF_SPOT_STRENGTH: spot opacity multiplier (the result is clamped to 1).
-double _sdfSpotStrength = _sdfEnv(
-  const String.fromEnvironment('PERF_SPOT_STRENGTH'),
-  1,
-);
+/// Edge anti-aliasing width in physical pixels.
+const double _kSdfAaWidth = 1;
 
-/// PERF_SPOT_CORE: fraction of the radius with solid color.
-double _sdfSpotCore = _sdfEnv(
-  const String.fromEnvironment('PERF_SPOT_CORE'),
-  0.05,
-);
+/// Stacking strength: inside bubbles the top bubble (the old renderer's order: later in the
+/// sorted list = on top) gives surface, mask and glow, with a soft transition across its edge;
+/// lower bubbles show through by 1 - strength. Necks outside all bubbles use the weighted
+/// blend.
+const double _kSdfStacking = 0.95;
 
-/// PERF_SPOT_FALLOFF: exponent of the fade from the core to the edge; 1 = linear,
-/// > 1 = more concentrated, < 1 = flatter.
-double _sdfSpotFalloff = _sdfEnv(
-  const String.fromEnvironment('PERF_SPOT_FALLOFF'),
-  1,
-  minValue: 0.01,
-);
-
-/// Spot alpha (before mask opacity) at [distance] from the center of a spot with [radius];
-/// must match spotKeep() in shaders/metaballs.frag.
-double _spotAlphaAt(double distance, double radius) {
-  final t = ((distance / radius - _sdfSpotCore) / max(1 - _sdfSpotCore, 0.001))
-      .clamp(0.0, 1.0);
-  return min(1, _sdfSpotStrength * pow(1 - t, _sdfSpotFalloff));
-}
-
-/// PERF debug view in the shader: 0 = off, 1 = mask alpha, 2 = spots covering the pixel / 20.
-/// Switched at runtime with the overlay slider (PERF_TUNING_SLIDERS=true).
-double _sdfDebugView = 0;
-
-/// PERF_SDF_DEPTH: how deep inside a bubble (logical px) its weight keeps growing. Small values
-/// make every bubble covering a pixel weigh the same, so overlaps are decided by
-/// PERF_SDF_SIZE_BIAS instead of by depth.
-final double _kSdfDepthClamp = _sdfEnv(
-  const String.fromEnvironment('PERF_SDF_DEPTH'),
-  72,
-);
-
-/// PERF_SDF_SIZE_BIAS: extra weight per logical px of radius (weights * exp(radius * bias)),
-/// so bigger bubbles win overlaps like in the old renderer (bigger on top). 0 = off.
-final double _kSdfSizeBias = _sdfEnv(
-  const String.fromEnvironment('PERF_SDF_SIZE_BIAS'),
-  0,
-);
-
-/// PERF_SDF_AA: edge anti-aliasing width in physical pixels.
-final double _kSdfAaWidth = _sdfEnv(
-  const String.fromEnvironment('PERF_SDF_AA'),
-  1,
-  minValue: 0.01,
-);
-
-/// PERF_SDF_STACKING: `on` (default) = inside bubbles only the top bubble (the old renderer's
-/// order: later in the sorted list = on top) gives surface, mask and glow, with a soft
-/// transition over max(fade, AA width) across its edge; necks outside all bubbles still use the
-/// weighted blend. `off` = weighted blend everywhere (lower bubbles show through). The value is
-/// the stacking strength from 0 (off) to 1 (on), adjustable at runtime with the overlay slider;
-/// values in between let lower bubbles partially show through.
-double _sdfStacking =
-    const String.fromEnvironment('PERF_SDF_STACKING', defaultValue: 'on') ==
-        'off'
-    ? 0
-    : 0.95; // tuned by eye with the overlay slider: lower bubbles barely show through
-
-String _sdfTunablesLine() =>
-    'k $_sdfSmoothing · neck fade ${_sdfColorFade.toStringAsFixed(2)} · edge fade ${_sdfEdgeFade.toStringAsFixed(2)} · '
-    'depth $_kSdfDepthClamp · sizeBias $_kSdfSizeBias · aa $_kSdfAaWidth · '
-    'stacking ${_sdfStacking.toStringAsFixed(2)}';
+/// Spot alpha (before mask opacity) at [distance] from the center of a spot with [radius]: the
+/// original gradient, solid up to 5% of the radius, then a linear fade. Must match spotKeep()
+/// in shaders/metaballs.frag.
+double _spotAlphaAt(double distance, double radius) =>
+    1 - ((distance / radius - 0.05) / 0.95).clamp(0.0, 1.0);
 
 /// Top-level tile size (logical px).
 const double _kSdfTileSize = 256;
@@ -336,7 +252,6 @@ class _MetaballRenderer {
   final Paint _paint = Paint()..isAntiAlias = false;
   int _shaderIndex = 0;
 
-  late _PaintManager _manager;
   double _pixelSize = 1;
 
   // Grid candidates of a top-level tile, then one list per split depth (reused).
@@ -371,41 +286,26 @@ class _MetaballRenderer {
   // Stamps for _Bubble.sdfMark (strictly increasing, so stale marks never match).
   int _markStamp = 0;
 
-  // Per-frame stats.
-  int _frameTiles = 0;
-  int _frameSplits = 0;
-  int _frameCulled = 0;
-  int _frameOccludedPairs = 0;
-  int _frameTileOccludedPairs = 0;
-  int _frameTileOccludedBubbles = 0;
-
   void paint(
     Canvas canvas,
     Size size,
     _PaintManager manager,
     double pixelSize,
   ) {
-    _manager = manager;
     _pixelSize = pixelSize;
     _shaderIndex = 0;
-    _frameTiles = 0;
-    _frameSplits = 0;
-    _frameCulled = 0;
-    _frameOccludedPairs = 0;
-    _frameTileOccludedPairs = 0;
-    _frameTileOccludedBubbles = 0;
 
     final w = size.width;
     final h = size.height;
-    final bubbleReach = manager.maxBubbleRadius + _sdfSmoothing;
-    final spotReach = manager.maxSpotRadius * _sdfSpotSize;
+    final bubbleReach = manager.maxBubbleRadius + _kSdfSmoothing;
+    final spotReach = manager.maxSpotRadius;
     final cols = (w / _kSdfTileSize).ceil();
     final rows = (h / _kSdfTileSize).ceil();
 
-    _edge = max(_sdfEdgeFade, pixelSize * _kSdfAaWidth);
+    _edge = max(_kSdfEdgeFade, pixelSize * _kSdfAaWidth);
     _neckDepth = _edge / 2;
-    _neckNear = _sdfSmoothing / 4 + _edge / 2;
-    _neckReach = _sdfSmoothing + _edge / 2;
+    _neckNear = _kSdfSmoothing / 4 + _edge / 2;
+    _neckReach = _kSdfSmoothing + _edge / 2;
     _buildPairs(manager);
     _binPairs(w, h, cols, rows);
 
@@ -426,7 +326,7 @@ class _MetaballRenderer {
         );
         if (_rootBubbles.isEmpty) continue;
         // Stacking needs bottom-to-top order; sub-tiles keep it while filtering.
-        if (_sdfStacking > 0) _rootBubbles.sort(_compareBubbleIndex);
+        _rootBubbles.sort(_compareBubbleIndex);
         manager.spotGrid.queryRect(
           Rect.fromLTRB(
             left - spotReach,
@@ -449,25 +349,14 @@ class _MetaballRenderer {
         );
       }
     }
-
-    manager
-      ..statSdfTiles = _frameTiles
-      ..statSdfSplits = _frameSplits
-      ..statSdfCulled = _frameCulled
-      ..statSdfPairs = _framePairs.length
-      ..statSdfOccludedPairs = _frameOccludedPairs
-      ..statSdfTileOccludedPairs = _frameTileOccludedPairs
-      ..statSdfTileOccludedBubbles = _frameTileOccludedBubbles;
   }
 
   /// Collects every fusing pair (center distance < r1 + r2 + k) with a neck that isn't hidden
   /// by higher bubbles into [_framePairs], ordered by the lower bubble's index.
   void _buildPairs(_PaintManager manager) {
     _framePairs.clear();
-    // Without stacking every color is the weighted blend, which already includes the necks.
-    if (_sdfStacking <= 0) return;
 
-    final k = _sdfSmoothing;
+    final k = _kSdfSmoothing;
     final bubbles = manager.bubbles;
     // Enough for the partners and for every bubble that can cover a neck point (within
     // lower radius + k + e/2 of the lower center).
@@ -500,11 +389,7 @@ class _MetaballRenderer {
             _neckNear,
             _neckReach,
           );
-        if (pair.boxCount == 0) continue;
-        if (_isOccluded(pair)) {
-          _frameOccludedPairs++;
-          continue;
-        }
+        if (pair.boxCount == 0 || _isOccluded(pair)) continue;
         used++;
         _framePairs.add(pair);
         if (lower.index < lastLower) ordered = false;
@@ -518,7 +403,7 @@ class _MetaballRenderer {
   /// Whether bubbles above the pair's lower bubble (candidates in [_nearBubbles]) fully cover
   /// the neck's bounds so that at most _kSdfOccludedKeep of it could show through.
   bool _isOccluded(_SdfPair q) {
-    final keepFactor = 1 - _sdfStacking;
+    final keepFactor = 1 - _kSdfStacking;
     double keep = 1;
     for (int n = 0; n < _nearBubbles.length; n++) {
       final c = _nearBubbles[n];
@@ -674,7 +559,7 @@ class _MetaballRenderer {
     final u0 = max(_rangeMin, -_neckDepth);
     final u1 = min(_rangeMax, _neckReach);
     if (u0 > u1) return false;
-    final k = _sdfSmoothing;
+    final k = _kSdfSmoothing;
     // The smaller distance is below near and the two differ by less than k.
     final lNear = min(l1, _neckNear);
     if (l0 <= lNear && _gap(l0, lNear, u0, u1) <= k) return true;
@@ -692,7 +577,7 @@ class _MetaballRenderer {
     double right,
     double bottom,
   ) {
-    final keepFactor = 1 - _sdfStacking;
+    final keepFactor = 1 - _kSdfStacking;
     double keep = 1;
     for (int k = bubbles.length - 1; k >= 0; k--) {
       final b = bubbles[k];
@@ -732,7 +617,7 @@ class _MetaballRenderer {
       if (_circleHitsRect(
         b.position.dx,
         b.position.dy,
-        b.radius + _sdfSmoothing,
+        b.radius + _kSdfSmoothing,
         left,
         top,
         right,
@@ -749,7 +634,7 @@ class _MetaballRenderer {
       if (_circleHitsRect(
         s.position.dx,
         s.position.dy,
-        s.radius * _sdfSpotSize,
+        s.radius,
         left,
         top,
         right,
@@ -769,38 +654,24 @@ class _MetaballRenderer {
     // Bubbles fully covering the tile hide everything below them: drop those bubbles and the
     // necks stacked under them (both lists are in layer order, so these are prefixes). The
     // silhouette is unaffected: the covering bubbles keep the whole tile inside it.
-    if (_sdfStacking > 0) {
-      final threshold = _occlusionThreshold(
-        tileBubbles,
-        left,
-        top,
-        right,
-        bottom,
-      );
-      if (threshold >= 0) {
-        int nb = 0;
-        while (nb < tileBubbles.length && tileBubbles[nb].index < threshold) {
-          nb++;
-        }
-        tileBubbles.removeRange(0, nb);
-        _frameTileOccludedBubbles += nb;
-        int np = 0;
-        while (np < tilePairs.length && tilePairs[np].lower.index < threshold) {
-          np++;
-        }
-        tilePairs.removeRange(0, np);
-        _frameTileOccludedPairs += np;
+    final threshold = _occlusionThreshold(
+      tileBubbles,
+      left,
+      top,
+      right,
+      bottom,
+    );
+    if (threshold >= 0) {
+      int nb = 0;
+      while (nb < tileBubbles.length && tileBubbles[nb].index < threshold) {
+        nb++;
       }
-    }
-
-    if (tileBubbles.length > _manager.statSdfMaxTileBubbles) {
-      _manager.statSdfMaxTileBubbles = tileBubbles.length;
-    }
-    if (tileSpots.length > _manager.statSdfMaxTileSpots) {
-      _manager.statSdfMaxTileSpots = tileSpots.length;
-    }
-    if (tilePairs.length > _manager.statSdfMaxTilePairs) {
-      _manager.statSdfMaxTilePairs = tilePairs.length;
+      tileBubbles.removeRange(0, nb);
+      int np = 0;
+      while (np < tilePairs.length && tilePairs[np].lower.index < threshold) {
+        np++;
+      }
+      tilePairs.removeRange(0, np);
     }
 
     if (tileSpots.length > _kSdfMaxSpots) {
@@ -812,7 +683,6 @@ class _MetaballRenderer {
         tileSpots.length > _kSdfMaxSpots;
 
     if (overflow && depth < _kSdfMaxSplitDepth) {
-      _frameSplits++;
       final midX = (left + right) / 2;
       final midY = (top + bottom) / 2;
       final next = depth + 1;
@@ -877,15 +747,13 @@ class _MetaballRenderer {
           b.sortKey = sqrt(dx * dx + dy * dy) - b.radius;
         }
         tileBubbles.sort(_compareBubbleKeyAscending);
-        _manager.statSdfDropped += tileBubbles.length - _kSdfMaxEvents;
         tileBubbles.length = _kSdfMaxEvents;
-        if (_sdfStacking > 0) tileBubbles.sort(_compareBubbleIndex);
+        tileBubbles.sort(_compareBubbleIndex);
       }
       if (_writeEvents(tileBubbles, tilePairs, null) > _kSdfMaxEvents) {
         _trimPairs(tileBubbles, tilePairs, left, top, right, bottom);
       }
       if (tileSpots.length > _kSdfMaxSpots) {
-        _manager.statSdfDropped += tileSpots.length - _kSdfMaxSpots;
         tileSpots.length = _kSdfMaxSpots;
       }
     }
@@ -960,7 +828,6 @@ class _MetaballRenderer {
       if (lowerCost == 1) q.lower.sdfMark = paid;
       pairs[kept++] = q;
     }
-    _manager.statSdfDroppedPairs += pairs.length - kept;
     pairs.length = kept;
     pairs.sort(_comparePairOrder);
   }
@@ -1067,10 +934,7 @@ class _MetaballRenderer {
         (s.position.dy - top).abs(),
         (s.position.dy - bottom).abs(),
       );
-      s.sortKey = _spotAlphaAt(
-        sqrt(dx * dx + dy * dy),
-        s.radius * _sdfSpotSize,
-      );
+      s.sortKey = _spotAlphaAt(sqrt(dx * dx + dy * dy), s.radius);
     }
     spots.sort(_compareSpotKeyDescending);
 
@@ -1078,7 +942,6 @@ class _MetaballRenderer {
     for (int k = 0; k < spots.length; k++) {
       keep *= 1 - spots[k].sortKey;
       if (keep < _kSdfSaturatedKeep) {
-        _frameCulled += spots.length - (k + 1);
         spots.length = k + 1;
         return;
       }
@@ -1122,20 +985,16 @@ class _MetaballRenderer {
     }
 
     shader
-      ..setFloat(0, _sdfSmoothing)
+      ..setFloat(0, _kSdfSmoothing)
       ..setFloat(1, _pixelSize * _kSdfAaWidth)
-      ..setFloat(2, 1 / _sdfColorFade)
+      ..setFloat(2, 1 / _kSdfColorFade)
       ..setFloat(3, _kSdfDepthClamp)
       ..setFloat(4, _kSdfSizeBias)
       ..setFloat(5, refRadius)
       ..setFloat(6, ((eventCount + 1) ~/ 2).toDouble())
       ..setFloat(7, groupCount.toDouble())
-      ..setFloat(_kSdfParams2Base, _sdfStacking)
-      ..setFloat(_kSdfParams2Base + 1, _sdfEdgeFade)
-      ..setFloat(_kSdfParams2Base + 2, _sdfSpotStrength)
-      ..setFloat(_kSdfParams2Base + 3, _sdfSpotCore)
-      ..setFloat(_kSdfParams2Base + 4, _sdfSpotFalloff)
-      ..setFloat(_kSdfParams2Base + 5, _sdfDebugView);
+      ..setFloat(_kSdfParams2Base, _kSdfStacking)
+      ..setFloat(_kSdfParams2Base + 1, _kSdfEdgeFade);
 
     for (int k = 0; k < groupCount * 4; k++) {
       final double x, y, r;
@@ -1143,7 +1002,7 @@ class _MetaballRenderer {
         final s = tileSpots[k];
         x = s.position.dx;
         y = s.position.dy;
-        r = s.radius * _sdfSpotSize;
+        r = s.radius;
       } else {
         // Padding: far away, so its alpha is 0.
         x = -100000;
@@ -1165,7 +1024,6 @@ class _MetaballRenderer {
       }
     }
 
-    _frameTiles++;
     _paint.shader = shader;
     canvas.drawRect(Rect.fromLTRB(left, top, right, bottom), _paint);
   }

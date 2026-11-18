@@ -10,35 +10,6 @@ class _PaintManager extends ChangeNotifier {
   Size get _canvasSize => _canvasSizeRaw!;
   bool _canvasSizeUpdated = false;
 
-  /// PERF: metaball renderer stats (filled by _MetaballRenderer). Tiles, splits and culled
-  /// (saturated, invisible) spots are per frame; max values and dropped objects accumulate
-  /// (reset when a measuring phase starts).
-  int statSdfTiles = 0;
-  int statSdfSplits = 0;
-  int statSdfCulled = 0;
-  int statSdfMaxTileBubbles = 0;
-  int statSdfMaxTileSpots = 0;
-  int statSdfDropped = 0;
-
-  /// Fusing bubble pairs (necks) per frame, max per drawn tile and dropped on overflow.
-  int statSdfPairs = 0;
-  int statSdfMaxTilePairs = 0;
-  int statSdfDroppedPairs = 0;
-
-  /// Per frame: pairs skipped because higher bubbles hide the whole neck, and pairs and
-  /// bubbles skipped in tiles fully covered by higher bubbles (summed over tiles).
-  int statSdfOccludedPairs = 0;
-  int statSdfTileOccludedPairs = 0;
-  int statSdfTileOccludedBubbles = 0;
-
-  void resetSdfStats() {
-    statSdfMaxTileBubbles = 0;
-    statSdfMaxTileSpots = 0;
-    statSdfDropped = 0;
-    statSdfMaxTilePairs = 0;
-    statSdfDroppedPairs = 0;
-  }
-
   final _SortedBubbleList bubbles = _SortedBubbleList();
 
   /// Bridges keyed by [_pairKey]; insertion-ordered like the former Set.
@@ -436,9 +407,6 @@ class _PaintManager extends ChangeNotifier {
     notifyListeners();
     _canvasSizeUpdated = false;
   }
-
-  /// PERF: repaints without advancing the animation (used while paused).
-  void requestRepaint() => notifyListeners();
 
   void handleTap(Offset tapPos) {
     for (int i = bubbles.length - 1; i >= 0; i--) {
