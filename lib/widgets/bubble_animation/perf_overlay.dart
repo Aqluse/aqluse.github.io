@@ -6,6 +6,9 @@ const bool _kPerfOverlay = true;
 
 const bool _kPerfTuningSliders = bool.fromEnvironment('PERF_TUNING_SLIDERS');
 
+/// PERF: animation paused from the overlay (only with PERF_TUNING_SLIDERS).
+bool _perfPaused = false;
+
 enum _PerfPhase { warmUp, measuring, done }
 
 class _PerfOverlay extends StatefulWidget {
@@ -209,7 +212,18 @@ class _PerfOverlayState extends State<_PerfOverlay>
                 min: 0,
                 max: 2,
                 step: 1,
-                onChanged: (value) => _sdfDebugView = value,
+                onChanged: (value) {
+                  _sdfDebugView = value;
+                  widget.manager.requestRepaint();
+                },
+              ),
+            if (_kPerfTuningSliders)
+              TextButton(
+                onPressed: () => setState(() => _perfPaused = !_perfPaused),
+                child: Text(
+                  _perfPaused ? '▶ resume animation' : '⏸ pause animation',
+                  style: textStyle,
+                ),
               ),
           ],
         ),
